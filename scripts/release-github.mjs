@@ -12,7 +12,9 @@ const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url
 const notesPath = process.argv[2] ?? `artifacts/local-review-notes/release-draft-${pkg.version}.zh-CN.md`;
 const notes = (await readFile(resolve(notesPath), 'utf8')).trim();
 assert.ok(notes.startsWith(`# DSH Runtime Guard ${pkg.version} - `), 'Write version-specific Chinese release notes before publishing');
-const title = notes.split(/\r?\n/, 1)[0].slice(2);
+const [heading, ...rest] = notes.split(/\r?\n/);
+const title = heading.slice(2);
+const releaseBody = rest.join('\n').trim();
 const tag = `v${pkg.version}`, archive = resolve(`artifacts/${pkg.name}-${pkg.version}.tgz`);
 const data = await readFile(archive);
 const entries = new Map();
@@ -44,7 +46,7 @@ const exists = await fetch(`${base}/releases/tags/${tag}`, { headers, signal: Ab
 assert.equal(exists.status, 404, 'Refuse overwriting an existing release');
 const release = await request(`${base}/releases`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
   tag_name: tag, target_commitish: head, name: title, draft: true, prerelease: false,
-  body: `${notes}\n\n## 安装包校验\n\nSHA-256（${pkg.name}-${pkg.version}.tgz）：\n\n\`\`\`text\n${sha256}\n\`\`\`\n`,
+  body: `${releaseBody}\n\n## 安装包校验\n\nSHA-256（${pkg.name}-${pkg.version}.tgz）：\n\n\`\`\`text\n${sha256}\n\`\`\`\n`,
 }) });
 const upload = release.upload_url.replace(/\{.*$/, '');
 let assetId;
