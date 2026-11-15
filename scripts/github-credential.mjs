@@ -1,3 +1,7 @@
+/**
+ * Maintainer-only / 仅限维护者使用：为发布脚本读取 GitHub 凭据。
+ * Publishing is explicit; the installed updater never reads these credentials.
+ */
 import { execFile } from 'node:child_process';
 
 /** Publishing is explicit; the installed updater never reads these credentials. */

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -25,20 +25,6 @@ export function readProfileJsonSync(directory: string, maxBytes: number, ...subp
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
-}
-
-/** Read a bounded JSON profile file asynchronously, with legacy directory fallback. */
-export async function readProfileJson(directory: string, maxBytes: number, ...subpath: string[]): Promise<unknown> {
-  for (const base of [PROFILE_DIR, LEGACY_PROFILE_DIR]) {
-    try {
-      const raw = await readFile(join(directory, base, ...subpath), 'utf8');
-      if (Buffer.byteLength(raw, 'utf8') > maxBytes) throw new Error('oversized settings');
-      return JSON.parse(raw);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  }
-  return undefined;
 }
 
 /** Keep the previous settings intact until the complete replacement is ready. */

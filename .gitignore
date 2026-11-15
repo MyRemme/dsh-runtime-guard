@@ -1,12 +1,6 @@
 node_modules/
 dist/
 artifacts/
-evaluations/
-releases/
-FEASIBILITY_REVIEW.zh-CN.md
-PRIVACY_REVIEW.zh-CN.md
-TEST_REPORT.zh-CN.md
-VALIDATION.zh-CN.md
 .npm-cache/
 .compat-cache/
 coverage/
@@ -21,6 +15,3 @@ auth.json
 *.key
 *.p12
 *.pfx
-*.wire-request.json
-*.raw-response.json
-*.payload.json

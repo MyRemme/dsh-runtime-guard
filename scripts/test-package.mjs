@@ -1,3 +1,6 @@
+/**
+ * Maintainer-only / 仅限维护者使用（via `npm run test:package`）：校验打包产物的 35 个宿主兼容矩阵。
+ */
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';

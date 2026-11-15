@@ -93,3 +93,8 @@ npm pack --ignore-scripts
 ```
 
 `npm run check` 执行类型检查、自动化测试和构建，测试使用合成模型输出。`npm pack` 生成可供 DSH 安装的 `.tgz`。
+
+## 维护与发布（仅限维护者）
+
+- `npm run test:package`（调用 [test-package.mjs](scripts/test-package.mjs)）：重新打包并验证 `.tgz` 在本地缓存的 35 个真实 DSH 宿主版本中均可加载运行，同时刷新兼容矩阵结果；普通用户无需运行。
+- [release-github.mjs](scripts/release-github.mjs) 与 [github-credential.mjs](scripts/github-credential.mjs)：**仅限仓库维护者使用**，用于读取发布凭据、创建 GitHub Release 并推送 `updates/stable.json`；插件自身运行与自动更新从不读取发布凭据。

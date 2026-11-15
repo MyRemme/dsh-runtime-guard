@@ -1,3 +1,7 @@
+/**
+ * Maintainer-only / 仅限维护者使用：发布 GitHub Release 并推进 updates/stable.json。
+ * Requires repository push rights via github-credential.mjs; end users never run this.
+ */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';

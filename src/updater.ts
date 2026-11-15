@@ -346,10 +346,10 @@ export class Updater implements UpdateAPI {
       await this.save();
     } catch (error) {
       if (this.disposed && !task.submitted) return;
+      // Once the final phase is visible, a follow-up check or manual retry must be
+      // accepted even while this task's state snapshot is still being persisted.
+      if (this.installing === task) this.installing = null;
       if (task.abort.signal.aborted && !task.submitted) {
-        // Once available is visible, a manual retry must be accepted even while
-        // this cancelled task's final state snapshot is still being persisted.
-        if (this.installing === task) this.installing = null;
         if (this.state.error !== 'storage-failed') { this.state.phase = 'available'; this.state.error = null; }
       } else { this.pending = null; this.state.phase = 'error'; this.state.error = error instanceof UpdateFailure ? error.message : 'update-install-failed'; }
       await this.save().catch(() => {});

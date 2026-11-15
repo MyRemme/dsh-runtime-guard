@@ -7,22 +7,24 @@ const root = new URL('../', import.meta.url);
 const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
 const entry = `runtime-${manifest.version}`;
 assert.ok((await readFile(new URL('cordis.patch.yml', root), 'utf8')).replace(/\r\n/g, '\n').includes(`name: ./dist/${entry}.js\n`));
+
+// Remove stale unbundled JS modules and sourcemaps so only clean bundled entries and declarations remain.
 for (const file of await readdir(new URL('dist/', root))) {
-  if (/^runtime-\d+\.\d+\.\d+\.js(?:\.map)?$/.test(file)) await unlink(new URL(`dist/${file}`, root));
+  if (/\.js(?:\.map)?$/.test(file)) await unlink(new URL(`dist/${file}`, root));
 }
 
-// A release-specific entry avoids stale loader namespaces after an online update.
-await build({
+const common = {
   absWorkingDir: fileURLToPath(root),
-  entryPoints: ['src/index.ts'],
-  outfile: `dist/${entry}.js`,
   bundle: true,
   platform: 'node',
   format: 'esm',
   target: 'node22.18',
   packages: 'external',
-  sourcemap: true,
-  sourcesContent: false,
+  sourcemap: false,
   legalComments: 'none',
-});
+};
+
+// A release-specific entry avoids stale loader namespaces after an online update.
+await build({ ...common, entryPoints: ['src/index.ts'], outfile: `dist/${entry}.js` });
+await build({ ...common, entryPoints: ['src/core.ts'], outfile: 'dist/core.js' });
 await writeFile(new URL('dist/index.js', root), `export * from './${entry}.js';\n`);
