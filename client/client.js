@@ -1,0 +1,381 @@
+// Native Harness module. Display state never enters the model's conversation.
+window.__ModuleLoader__.load({
+  id: 'dsh-runtime-guard',
+  factory: require => {
+    const React = require('react'), { createPortal } = require('react-dom');
+    const UI = require('@deepseek-ai/dsh-client-ui-primitives');
+    const h = React.createElement, PANEL = 'runtime-guard';
+    const css = `
+      .fs-root,.fs-dialog,.fs-toast{font:13px/20px var(--dsw-font-family,system-ui,sans-serif);letter-spacing:0;color:var(--dsw-alias-label-primary);box-sizing:border-box;overflow-wrap:anywhere}
+      .fs-root{height:100%;overflow:auto;padding:28px 32px 40px}.fs-page{max-width:960px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+      .fs-head,.fs-row,.fs-tools,.fs-state,.fs-event-head{display:flex;align-items:center;gap:8px;min-width:0}.fs-head{justify-content:space-between;gap:16px;flex-wrap:wrap}.fs-head h2{font-size:20px;line-height:28px;font-weight:500;margin:0}.fs-sub,.fs-muted{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}.fs-sub{margin:4px 0 0}.fs-tools{gap:4px;flex-wrap:wrap}.fs-state{font-size:12px;color:var(--dsw-alias-label-secondary)}
+      .fs-dot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary);flex:none}.fs-state[data-tone=warn],.fs-warn{color:var(--dsw-alias-state-warn-primary)}.fs-state[data-tone=warn] .fs-dot{background:currentColor}.fs-state[data-tone=off]{color:var(--dsw-alias-label-tertiary)}.fs-state[data-tone=off] .fs-dot{background:currentColor}
+      .fs-icon-button{width:28px!important;height:28px!important;padding:0!important;flex:none}.fs-action{height:28px;font-size:12px!important}.fs-switch{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--dsw-alias-label-secondary);margin-right:12px}
+      .fs-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0;border-top:.5px solid var(--dsw-alias-border-l2);border-bottom:.5px solid var(--dsw-alias-border-l2)}.fs-stat{padding:18px 16px;border-left:.5px solid var(--dsw-alias-border-l2)}.fs-stat:first-child{border-left:0;padding-left:0}.fs-stat dt{color:var(--dsw-alias-label-tertiary);font-size:12px}.fs-stat dd{font-size:24px;line-height:32px;font-weight:500;font-variant-numeric:tabular-nums;margin:4px 0 0}
+      .fs-section h3{font-size:14px;line-height:22px;font-weight:500;margin:0}.fs-section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.fs-facts{margin:0}.fs-fact{display:flex;justify-content:space-between;align-items:baseline;gap:20px;padding:10px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}.fs-fact dt{color:var(--dsw-alias-label-secondary);flex:none}.fs-fact dd{margin:0;text-align:right;min-width:0}.fs-note{margin:10px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px}.fs-empty{padding:28px 0;color:var(--dsw-alias-label-tertiary);text-align:center;border-top:.5px solid var(--dsw-alias-border-l2)}
+      .fs-events{list-style:none;padding:0;margin:0}.fs-event{padding:14px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}.fs-event-head{justify-content:space-between;align-items:baseline;gap:12px}.fs-event-title{font-weight:500;font-size:13px}.fs-event time{color:var(--dsw-alias-label-tertiary);font-size:11px;flex:none}.fs-event p{margin:5px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}.fs-event .fs-result{color:var(--dsw-alias-label-primary)}.fs-tag{font-size:11px;line-height:18px;padding:0 5px;border-radius:var(--dsw-radius-sm,4px);color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-interactive-bg-hover);white-space:nowrap}.fs-error{color:var(--dsw-alias-state-error-primary);margin:0}.fs-test{color:var(--dsw-alias-state-success-primary);margin:0}
+      .fs-dock{position:relative;min-width:0;max-width:100%;display:inline-flex}.fs-dock-button{font:11px/18px var(--dsw-font-family,system-ui,sans-serif);color:var(--dsw-alias-label-tertiary);border:0;background:transparent;padding:2px 4px;border-radius:var(--dsw-radius-sm,4px);display:inline-flex;align-items:center;gap:5px;cursor:pointer;min-width:0;max-width:100%;white-space:nowrap}.fs-dock-button span{overflow:hidden;text-overflow:ellipsis}.fs-dock-button:hover{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}.fs-dock-button[data-tone=warn]{color:var(--dsw-alias-state-warn-primary)}.fs-dialog{position:fixed;z-index:1100;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg,8px);background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-panel,0 6px 24px #0002);padding:16px;overflow:auto}.fs-dialog h3{margin:0;font-size:14px;font-weight:500}.fs-dialog .fs-head{flex-wrap:nowrap}.fs-dialog .fs-events{margin-top:8px}.fs-dialog .fs-event:last-child{border-bottom:0}.fs-dialog .fs-stats{margin-top:14px}.fs-dialog .fs-stat{padding:8px}.fs-dialog .fs-stat:first-child{padding-left:0}.fs-dialog .fs-stat dd{font-size:18px;line-height:24px}.fs-dialog .fs-fact{font-size:12px;gap:12px}
+      .fs-toast{position:fixed;right:20px;bottom:20px;z-index:1000;width:min(360px,calc(100vw - 40px));padding:14px 16px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg,8px);background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-panel,0 6px 24px #0002)}.fs-toast p{margin:5px 0 10px;font-size:12px;color:var(--dsw-alias-label-secondary)}.fs-summary{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
+      .fs-root button:focus-visible,.fs-dock-button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.fs-icon{display:inline-flex;flex:none;position:relative}.fs-icon .fs-dot{position:absolute;right:0;top:0;border:1px solid var(--dsw-alias-bg-base)}
+      @media(max-width:560px){.fs-root{padding:20px 16px 28px}.fs-page{gap:24px}.fs-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.fs-stat:nth-child(3){border-left:0;padding-left:0}.fs-stat:nth-child(n+3){border-top:.5px solid var(--dsw-alias-border-l2)}.fs-head{align-items:flex-start}.fs-tools{width:100%}.fs-event-head{flex-wrap:wrap;gap:2px}.fs-fact{gap:12px}.fs-dialog .fs-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      .fs-dialog,.fs-toast{background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-prominent,0 6px 24px #0002)}
+      .fs-conversations{display:flex;flex-direction:column;border-top:.5px solid var(--dsw-alias-border-l2)}.fs-conversation{padding:14px 0;border-bottom:.5px solid var(--dsw-alias-border-l2);display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.fs-conversation-main{min-width:0;flex:1}.fs-conversation-title{font-weight:500;margin-bottom:5px}.fs-live{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}.fs-event-context{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}.fs-link{border:0;background:transparent;color:var(--dsw-alias-state-business-primary);font:inherit;padding:0;text-align:left;cursor:pointer}.fs-link:disabled{color:var(--dsw-alias-label-secondary);cursor:default}.fs-health-note{margin:8px 0 0;font-size:12px;color:var(--dsw-alias-label-tertiary)}
+      @media(max-width:560px){.fs-conversation{flex-direction:column}.fs-conversation-main{width:100%}.fs-conversation .fs-tools{width:auto}}
+      .fs-model-modes{display:flex;flex-wrap:wrap;min-width:0;gap:18px;border:0;padding:0;margin:12px 0}.fs-model-modes label,.fs-model-option{display:flex;align-items:center;gap:8px}.fs-model-list{max-height:260px;overflow:auto;border-top:.5px solid var(--dsw-alias-border-l2);margin:12px 0}.fs-model-option{padding:8px 0;cursor:pointer}.fs-model-option span{min-width:0;overflow-wrap:anywhere}.fs-model-option small{display:block;color:var(--dsw-alias-label-tertiary)}.fs-model-option input,.fs-model-modes input{flex-shrink:0;accent-color:var(--dsw-alias-state-business-primary)}.fs-model-search{box-sizing:border-box;width:100%;padding:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:transparent;color:inherit;font:inherit}
+    `;
+    const labels = {
+      'correction-deferred': ['等待纠正', '当前回合结束后提交纠正；本次输出未中断。'],
+      'recovery-submitted': ['已提交纠正', '已开启独立纠正回合，恢复效果待确认。'],
+      'budget-exhausted': ['纠正次数已用完', '已达到本任务的纠正上限，没有追加模型请求。'],
+      'user-input-takes-priority': ['用户输入优先', '已有待处理输入，未自动停止或追加纠正回合，由宿主继续处理输入。'],
+      'intervention-unavailable': ['纠正不可用', '当前宿主或模式不支持该动作，未中断输出。'],
+      'recovery-failed': ['纠正提交失败', '没有确认纠正成功，请检查当前对话。'],
+      'cancel-requested': ['已请求中断', '已向宿主请求停止本次重复响应；不等于宿主已确认停止。'],
+      'stop-confirmed': ['已停止重复生成', '宿主已记录本轮因防护而停止；未自动重试或重放工具。'],
+      'stop-unconfirmed': ['停止结果未确认', '已结束跟踪，但没有收到属于本插件的停止确认。'],
+      'stop-failed': ['停止请求失败', '宿主未接受停止请求，请检查当前对话。'],
+      'correction-revoked': ['已撤销纠正', '监控关闭、请求中止或会话结束，待执行纠正已撤销。'],
+    };
+    const time = value => value ? new Date(value).toLocaleString() : '尚无';
+    const modeName = mode => mode === 'guard' ? '防护停止' : mode === 'assist' ? '有限纠正' : '仅观察';
+    function health(data) {
+      if (data.tracked === false) return { label: '仅保留历史记录', tone: 'off' };
+      const excluded = { paused: '监控已暂停', disabled: '此对话未启用', 'other-model': '当前模型不在监控范围', auxiliary: '辅助请求未监控', unavailable: data.live?.incompleteReason === 'monitor-error' ? '检测异常 · 仅传递输出' : '检测不完整 · 待下次请求', waiting: '待下次模型请求' };
+      const live = data.live, latest = data.latestEvent;
+      if (data.coverage !== 'unavailable' && excluded[data.coverage]) return { label: excluded[data.coverage], tone: 'off' };
+      if (live?.incompleteReason === 'monitor-error' || latest?.kind === 'internal-error') return { label: '检测异常 · 仅传递输出', tone: 'off' };
+      if (data.coverage === 'unavailable' && latest?.kind === 'recovery') return { label: labels[latest.action]?.[0] || '处理状态已更新', tone: 'warn' };
+      if (data.coverage === 'unavailable' && (live?.risk === 'confirmed' || latest?.kind === 'stream-repeat' && latest.confirmed)) return { label: '确认重复 · 请求已结束', tone: 'warn' };
+      if (excluded[data.coverage]) return { label: excluded[data.coverage], tone: 'off' };
+      if (latest?.kind === 'recovery') return { label: labels[latest.action]?.[0] || '处理状态已更新', tone: 'warn' };
+      if (live?.evidence?.uncertainty || latest?.uncertainty && live?.risk !== 'clear') return { label: '无法确认空转 · 已通知', tone: 'warn' };
+      if (live?.risk === 'confirmed' || (!live && latest?.kind === 'stream-repeat' && latest.confirmed)) return { label: '确认重复 · 未中断', tone: 'warn' };
+      if (live?.risk === 'suspected' || (!live && latest?.kind === 'stream-repeat')) return { label: '疑似重复 · 观察中', tone: 'warn' };
+      if (live?.incomplete) return { label: live.incompleteReason === 'fence-limit' ? '检测不完整 · 围栏候选行超限' : '检测不完整 · 内容块超限', tone: 'off' };
+      if (live?.active && live.silentForMs >= 30000) return { label: '等待输出 · 尚不能判断', tone: 'warn' };
+      if (latest?.kind === 'tool-repeat') return { label: '工具重复 · 仅提醒', tone: 'warn' };
+      if (data.coverage === 'monitoring') return { label: !live ? '正在监控' : live.checks ? '持续检测 · 暂未发现循环' : live.reasoningChars + live.textChars ? '接收输出 · 积累检测样本' : '等待模型首个输出', tone: 'on' };
+      return { label: live && !live.checks ? '请求结束 · 检测样本不足' : '最近请求 · 未发现重复', tone: live && !live.checks ? 'off' : 'on' };
+    }
+    function explain(event, mode) {
+      if (event.kind === 'stream-repeat') return {
+        title: event.uncertainty ? '重复特征待确认' : event.confirmed ? `确认${event.contentType === 'text' ? '正文' : event.contentType === 'reasoning' ? '推理' : '输出'}重复` : '疑似重复',
+        reason: `检测到${event.method === 'phrase' ? '夹杂变化文字的短句反复出现' : '周期性短句轮转'}${event.period ? `，周期 ${event.period} 字符` : ''}${event.repeats ? `、重复 ${event.repeats} 次` : ''}${event.coverage === undefined ? '' : `，${event.method === 'phrase' ? '短句单元占比' : '窗口覆盖'} ${Math.round(event.coverage * 100)}%`}${event.novelty === undefined ? '' : `，新增四字符片段 ${Math.round(event.novelty * 100)}%`}。${event.confirmed ? '连续多次检查通过重复确认。' : '尚未达到连续确认条件。'}`,
+        result: event.uncertainty ? `${event.uncertainty === 'changing-units' ? '重复短句间的对象或内容仍在变化' : '重复短句间仍有变化编号'}，可能是逐项检查，无法确认是否空转。已通知你，未自动停止或提交纠正，继续监测。`
+          : event.confirmed && mode === 'guard' && event.contentType === 'reasoning' ? '已确认推理重复；停止请求和宿主确认见后续处理记录。'
+          : event.confirmed && mode === 'assist' ? '仅确认重复；纠正是否排队或提交见后续处理记录。本次输出未中断。' : '仅告警，未拦截、未中断输出。',
+      };
+      if (event.kind === 'tool-repeat') return { title: '工具重复告警', reason: `相同工具、参数及结果${event.repeats ? `连续出现 ${event.repeats} 次` : '重复出现'}，可能没有新增进展。`, result: '仅提醒，未阻止、跳过或重放任何工具。' };
+      if (event.kind === 'recovery') return { title: labels[event.action]?.[0] || '纠正状态变更', reason: '此前检测到连续重复推理或正文。', result: labels[event.action]?.[1] || '请查看后续记录确认实际处理结果。' };
+      return { title: event.kind === 'internal-error' ? '监控异常' : '监控已启动', reason: '', result: event.kind === 'internal-error' ? '当前检测可能不完整，模型输出继续传递。' : '观察模式已就绪。' };
+    }
+    function createController(ctx) {
+      let state = { data: null, conversations: [], conversationError: '', sessions: Object.create(null), sessionErrors: Object.create(null), error: '', busy: false, test: '', toast: null, updatedAt: null, updates: null, updateError: '', updateBusy: false, modelScope: null, scopeError: '', scopeReadError: '', scopeLoading: false };
+      const listeners = new Set(), requests = new Set(), downloads = new Map(), watched = new Map(), pendingSessions = new Set();
+      let disposed = false, polling = false, listing = false, generation = 0, lastNotice = '';
+      const publish = patch => { if (!disposed) { state = { ...state, ...patch }; for (const fn of listeners) fn(); } };
+      async function call(endpoint, payload = {}) {
+        const controller = new AbortController(); requests.add(controller);
+        const timer = setTimeout(() => controller.abort(), 8000);
+        try {
+          const result = await ctx.connection.rpc.call('/runtime-guard', endpoint, payload, controller.signal);
+          if (!result?.ok) throw new Error('Host operation unavailable');
+          return result.value;
+        } finally { clearTimeout(timer); requests.delete(controller); }
+      }
+      function accept(data) {
+        const event = data.events.find(e => e.kind === 'internal-error' || e.kind === 'tool-repeat' || (e.kind === 'stream-repeat' && (e.confirmed || e.uncertainty)) || (e.kind === 'recovery' && e.action === 'recovery-submitted'));
+        const id = event ? `${event.session}/${event.time}/${event.kind}/${event.contentType || ''}/${event.action || ''}/${event.repeats || ''}` : '';
+        const patch = { data, error: '', updatedAt: new Date().toISOString() };
+        if (id && id !== lastNotice) { patch.toast = event; lastNotice = id; }
+        publish(patch);
+      }
+      async function refreshSession(id) {
+        if (disposed || state.busy || pendingSessions.has(id)) return;
+        const current = generation; pendingSessions.add(id);
+        try {
+          const value = await call('session', { sessionId: id });
+          if (generation === current && watched.has(id)) publish({ sessions: { ...state.sessions, [id]: value }, sessionErrors: { ...state.sessionErrors, [id]: '' } });
+        } catch { if (generation === current && watched.has(id)) publish({ sessionErrors: { ...state.sessionErrors, [id]: '会话监控未连接' } }); }
+        finally { pendingSessions.delete(id); if (current !== generation && watched.has(id)) void refreshSession(id); }
+      }
+      async function refresh() {
+        if (polling || disposed || state.busy) return;
+        polling = true; const current = generation;
+        try { const data = await call('snapshot'); if (generation === current) accept(data); }
+        catch { if (generation === current) publish({ error: '监控服务未连接' }); }
+        finally { polling = false; if (current !== generation) void refresh(); }
+      }
+      async function refreshConversations() {
+        if (disposed || listing || state.busy) return;
+        listing = true; const current = generation;
+        try { const value = await call('conversations'); if (generation === current) publish({ conversations: Array.isArray(value) ? value : [], conversationError: '' }); }
+        catch { if (generation === current) publish({ conversationError: '对话列表未连接，请刷新重试。' }); }
+        finally { listing = false; if (current !== generation) void refreshConversations(); }
+      }
+      let scopePolling = false;
+      async function refreshScope(catalog = false) {
+        if (disposed || scopePolling || state.busy) return;
+        scopePolling = true; const current = generation;
+        if (catalog) publish({ scopeLoading: true });
+        try {
+          const value = await call(catalog ? 'refreshModels' : 'modelScope');
+          if (current === generation && ['all', 'selected'].includes(value?.scope) && Array.isArray(value.selections)) publish({ modelScope: value, scopeReadError: '' });
+        } catch { if (current === generation) publish({ scopeReadError: '监控范围未同步，请重试。' }); }
+        finally {
+          scopePolling = false; if (catalog) publish({ scopeLoading: false });
+          if (current !== generation) void refreshScope();
+        }
+      }
+      let updatePolling = false, updateGeneration = 0;
+      async function refreshUpdates() {
+        if (disposed || updatePolling || state.updateBusy) return;
+        updatePolling = true; const current = updateGeneration;
+        try { const value = await call('updates'); if (current === updateGeneration && value && typeof value.currentVersion === 'string') publish({ updates: value, updateError: '' }); }
+        catch { if (current === updateGeneration) publish({ updateError: '更新服务未连接' }); }
+        finally {
+          updatePolling = false;
+          // A stale in-flight poll may have blocked the post-action refresh.
+          if (current !== updateGeneration) void refreshUpdates();
+        }
+      }
+      async function updateAction(endpoint, payload) {
+        if (disposed || state.updateBusy) return;
+        updateGeneration++; publish({ updateBusy: true, updateError: '' });
+        try { publish({ updates: await call(endpoint, payload) }); }
+        catch { publish({ updateError: '更新操作未完成，请检查状态后重试。' }); }
+        finally { updateGeneration++; publish({ updateBusy: false }); void refreshUpdates(); }
+      }
+      async function poll() { await Promise.all([refresh(), refreshConversations(), refreshUpdates(), refreshScope(), ...[...watched.keys()].map(refreshSession)]); }
+      async function action(endpoint, payload) {
+        if (state.busy || disposed) return;
+        generation++; publish({ busy: true, error: '' });
+        try {
+          const value = await call(endpoint, payload);
+          if (disposed) return;
+          if (endpoint === 'setMonitoring' || endpoint === 'setMode') accept(value);
+          if (endpoint === 'setOperationSafety') publish({ data: state.data ? { ...state.data, operationSafety: value } : null, safetyError: '' });
+          if (endpoint === 'setSessionEnabled' && payload?.sessionId && watched.has(payload.sessionId)) {
+            publish({ sessions: { ...state.sessions, [payload.sessionId]: value }, sessionErrors: { ...state.sessionErrors, [payload.sessionId]: '' } });
+          }
+          if (endpoint === 'setModelScope') publish({ modelScope: value, scopeError: '' });
+          if (endpoint === 'selfTest') publish({ test: value.passed && value.modelRequests === 0 ? '离线自检通过，未调用模型，未计入真实告警。' : '离线自检未通过。' });
+          if (endpoint === 'export') {
+            const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }));
+            if (downloads.size >= 10) { const [old, timer] = downloads.entries().next().value; clearTimeout(timer); URL.revokeObjectURL(old); downloads.delete(old); }
+            downloads.set(url, setTimeout(() => { URL.revokeObjectURL(url); downloads.delete(url); }, 60000));
+            const a = document.createElement('a'); a.href = url; a.download = 'runtime-guard-diagnostics.json'; document.body.appendChild(a); a.click(); a.remove();
+          }
+        } catch { publish(endpoint === 'setOperationSafety' ? { safetyError: '操作防护设置保存失败，原设置仍然生效。请重试。' } : endpoint === 'setModelScope' ? { scopeError: '范围保存失败，原设置仍然生效。请重试。' } : { error: '操作未完成，请重试。' }); }
+        finally { generation++; publish({ busy: false }); void refresh(); void refreshScope(); refreshConversations(); for (const id of watched.keys()) refreshSession(id); }
+      }
+      const onVisibility = () => { if (document.visibilityState !== 'hidden' && !disposed) void poll(); };
+      document.addEventListener?.('visibilitychange', onVisibility);
+      const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void poll(); }, 2000); poll();
+      return {
+        subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); }, snapshot: () => state, refresh: poll, refreshModels: () => refreshScope(true), action, updateAction,
+        watch: id => { watched.set(id, (watched.get(id) || 0) + 1); refreshSession(id); return () => { const count = watched.get(id) - 1; if (count) watched.set(id, count); else { watched.delete(id); const { [id]: _old, ...sessions } = state.sessions; const { [id]: _error, ...sessionErrors } = state.sessionErrors; publish({ sessions, sessionErrors }); } }; },
+        dismiss: () => publish({ toast: null }),
+        dispose: () => { disposed = true; clearInterval(timer); document.removeEventListener?.('visibilitychange', onVisibility); for (const request of requests) request.abort(); for (const [url, timer] of downloads) { clearTimeout(timer); URL.revokeObjectURL(url); } downloads.clear(); watched.clear(); listeners.clear(); },
+      };
+    }
+    function apply(ctx) {
+      const tag = document.createElement('style'); tag.dataset.pluginCss = 'dsh-runtime-guard'; tag.textContent = css; document.head.appendChild(tag);
+      const controller = createController(ctx); ctx.effect(() => () => { controller.dispose(); tag.remove(); });
+      const useState = () => React.useSyncExternalStore(controller.subscribe, controller.snapshot, controller.snapshot);
+      const icon = (Component, size = 14) => Component ? h(Component, { size, 'aria-hidden': true }) : null;
+      const command = (label, onClick, Icon, disabled, onlyIcon = false) => h(UI.Button, { type: 'button', variant: 'ghost', size: 'sm', className: onlyIcon ? 'fs-icon-button' : 'fs-action', title: label, 'aria-label': label, onClick, disabled, icon: icon(Icon) }, onlyIcon ? null : label);
+      const status = (text, tone = 'on') => h('span', { className: 'fs-state', 'data-tone': tone }, h('i', { className: 'fs-dot', 'aria-hidden': true }), text);
+      const stat = (label, value) => h('div', { className: 'fs-stat', key: label }, h('dt', null, label), h('dd', null, value));
+      const fact = (label, value) => h('div', { className: 'fs-fact', key: label }, h('dt', null, label), h('dd', null, value));
+      const service = name => ctx.get?.(name) ?? ctx[name];
+      function conversationName(item) {
+        const row = service('sessions')?.list?.getSnapshot?.().byId?.[item.sessionId];
+        const title = typeof row?.title === 'string' && row.title.trim() ? row.title : null;
+        return title ? `${title} · ${item.sessionKey.slice(0, 6)}` : `对话 ${item.sessionKey.slice(0, 8)}`;
+      }
+      const openConversation = item => service('uiWorkspace')?.openSession?.(item.sessionId);
+      function Live({ data }) {
+        const live = data.live;
+        return h(React.Fragment, null,
+          h('div', { className: 'fs-live' }, h('span', null, `第 ${live?.turn ?? data.turn ?? 0} 轮 · 步骤 ${live?.step ?? data.step ?? 0}`),
+            live && h('span', null, `推理 ${live.reasoningChars.toLocaleString()} 字符`), live && h('span', null, `正文 ${live.textChars.toLocaleString()} 字符`),
+            live && h('span', null, `已检查 ${live.checks} 次`), live && h('span', null, `检测文本 ${live.analyzedChars ?? 0} 字符`), h('span', null, `工具结果 ${data.toolResults ?? 0} 次`)),
+          live && h('div', { className: 'fs-live' }, h('span', null, `最近输出 ${time(live.lastOutputAt)}`),
+            h('span', null, `最近检测 ${time(live.lastCheckAt)}`), live.active && h('span', null, `等待新输出 ${Math.floor(live.silentForMs / 1000)} 秒`)));
+      }
+      function Events({ events, mode, conversations = [] }) {
+        return h('ol', { className: 'fs-events' }, events.map((event, i) => {
+          const text = explain(event, mode);
+          return h('li', { className: 'fs-event', key: `${event.session}/${event.time}/${i}` },
+            h('div', { className: 'fs-event-head' }, h('span', { className: 'fs-event-title' }, text.title), h('time', null, time(event.time))),
+            h('div', { className: 'fs-event-context' }, event.session && (() => { const item = conversations.find(item => item.sessionKey === event.session); return h('button', { type: 'button', className: 'fs-link', disabled: !item || !service('uiWorkspace')?.openSession, onClick: () => openConversation(item) }, item ? conversationName(item) : `对话 ${event.session.slice(0, 8)}`); })(),
+              event.turn !== undefined && h('span', { className: 'fs-tag' }, `第 ${event.turn} 轮${event.step === undefined ? '' : ` · 步骤 ${event.step}`}`)),
+            text.reason && h('p', null, text.reason), h('p', { className: 'fs-result' }, text.result));
+        }));
+      }
+      function Panel({ view } = {}) {
+        const state = useState(), data = state.data, online = data && !state.error;
+        const [filter, setFilter] = React.useState('');
+        React.useEffect(() => service('sessions')?.list?.subscribe?.(() => controller.refresh()), []);
+        const label = !online ? (state.error || '连接中') : data.monitoring ? '监控在线' : '监控已暂停';
+        if (view === 'summary') return h('div', { className: 'fs-summary' }, status(label, online && data.monitoring ? 'on' : 'off'), data && `已监控 ${data.monitoredRequests} 次 · 确认重复 ${data.confirmed} 次`);
+        const events = data?.events.filter(e => e.kind !== 'compatibility' && (!filter || e.session === filter)) || [];
+        return h('section', { className: 'fs-root', 'aria-label': '运行时护栏监控面板' }, h('div', { className: 'fs-page' },
+          h('header', { className: 'fs-head' }, h('div', null, h('h2', null, 'DSH 运行时护栏'), h('p', { className: 'fs-sub' }, '防空转监控 · 操作安全防护与处理记录')),
+            h('div', { className: 'fs-tools' }, h('span', { className: 'fs-switch' }, '启用监控', h(UI.Switch, { label: '启用监控', checked: Boolean(data?.monitoring), disabled: !online || state.busy, onChange: enabled => controller.action('setMonitoring', { enabled }) })),
+              command('刷新状态', controller.refresh, UI.IconRefreshOutlineRegular, state.busy, true), command('离线自检', () => controller.action('selfTest'), UI.IconInfoOutlineRegular, !online || state.busy), command('导出诊断日志', () => controller.action('export'), UI.IconDownloadOutlineRegular, !online || state.busy, true))),
+          state.error && h('p', { role: 'alert', className: 'fs-error' }, state.error), state.test && h('p', { role: 'status', className: 'fs-test' }, state.test),
+          data && h(React.Fragment, null,
+            h('dl', { className: 'fs-stats' }, stat('已监控请求', data.monitoredRequests), stat('当前请求', data.activeRequests), stat('确认重复', data.confirmed), stat('已提交纠正', data.recoverySubmitted)),
+            h('section', { className: 'fs-section' }, h('div', { className: 'fs-section-head' }, h('h3', null, '运行状态'), status(label, online && data.monitoring ? 'on' : 'off')),
+              h('fieldset', { className: 'fs-model-modes', disabled: !online || state.busy, 'aria-label': '处理模式选择' },
+                ...[['observe', '仅观察'], ['guard', '防护停止'], ['assist', '有限纠正']].map(([key, text]) => h('label', { key },
+                  h('input', { type: 'radio', name: 'flash-mode', value: key, checked: data.mode === key, disabled: !online || state.busy || (key === 'guard' && data.compatibility?.guard === false), onChange: () => controller.action('setMode', { mode: key }) }), text))),
+              h('dl', { className: 'fs-facts' }, fact('处理模式', modeName(data.mode)), fact('检测后动作', data.mode === 'guard' ? '确认推理重复后请求停止本轮' : data.mode === 'assist' ? '回合结束后可提交纠正' : '显示告警，不中断输出'), fact('最近监控', time(data.lastMonitoredAt)), fact('磁盘日志', !data.logging.enabled ? '未开启' : data.logging.healthy ? '写入正常' : '写入失败'))),
+            h('section', { className: 'fs-section', 'aria-label': '逐对话实时监控' }, h('div', { className: 'fs-section-head' }, h('h3', null, '对话实时监控'), h('span', { className: 'fs-muted' }, '每 2 秒同步')),
+              (state.error || state.conversationError) && h('p', { className: 'fs-error' }, '连接中断，以下为上次同步数据，不能判断当前模型状态。'),
+              h('div', { className: 'fs-conversations' }, state.conversations.length ? state.conversations.map(item => { const current = state.error || state.conversationError ? { label: '状态已过期 · 等待重新连接', tone: 'off' } : health(item); const pausedSession = item.sessionEnabled === false || item.coverage === 'disabled'; return h('article', { className: 'fs-conversation', key: item.sessionKey },
+                h('div', { className: 'fs-conversation-main' }, h('div', { className: 'fs-conversation-title' }, conversationName(item)), status(current.label, current.tone), h(Live, { data: item }),
+                  h('div', { className: 'fs-live' }, `${item.counterScope === 'retained-events' ? '保留事件中' : '累计'}确认重复 ${item.confirmed} 次 · 已提交纠正 ${item.recoverySubmitted} 次 · ${item.cancelRequested ? `请求中断 ${item.cancelRequested} 次` : '未拦截、未中断'}`), !item.tracked && h('p', { className: 'fs-muted' }, '会话已不在实时跟踪中，仅显示保留事件。')),
+                h('div', { className: 'fs-tools' }, command(pausedSession ? '启用此对话监控' : '暂停此对话监控', () => controller.action('setSessionEnabled', { sessionId: item.sessionId, enabled: pausedSession }), null, state.busy), command('查看此对话记录', () => setFilter(item.sessionKey), UI.IconInfoOutlineRegular, false), command('打开对话', () => openConversation(item), null, !service('uiWorkspace')?.openSession))); }) : h('div', { className: 'fs-empty' }, '尚无已跟踪的对话；下一次匹配的模型请求开始后自动显示。')),
+              h('p', { className: 'fs-health-note' }, '实时观察已收到的输出；“暂未发现循环”不保证后续不会重复，也不代表任务结果正确。长时间没有输出不直接判定为低熵循环。')),
+            h('section', { className: 'fs-section' }, h('div', { className: 'fs-section-head' }, h('h3', null, '检测与处理'), h('span', { className: 'fs-muted' }, `${events.length} 条记录`)),
+              filter && command('显示全部对话', () => setFilter(''), UI.IconCloseOutlineRegular, false),
+              events.length ? h(Events, { events, mode: data.mode, conversations: state.conversations }) : h('div', { className: 'fs-empty' }, '尚无检测记录'), h('p', { className: 'fs-note' }, '显示发生在哪个对话、第几轮、推理或正文的重复特征、原因和实际动作。不保存推理正文、工具参数或命令；导出不包含对话名称和原始 ID。'))),
+          h(OperationSafety, { state }), h(ModelScope, { state }), h(Updates, { state }),
+          h('footer', { className: 'fs-muted' }, `最近同步 ${time(state.updatedAt)}`)));
+      }
+      function OperationSafety({ state }) {
+        const value = state.data?.operationSafety;
+        const labels = { disabled: '未开启', active: '已启用 · 执行前检查', blocked: '防护不可用 · 已阻止受保护工具', disposed: '已停止' };
+        const rules = {
+          elevation: '系统提权', 'outside-workspace': '工作区外操作', 'read-only-write': '只读模式修改', 'read-only-unknown': '无法确认仅进行读取',
+          destructive: '破坏性操作', 'opaque-execution': '脚本或动态执行', 'invalid-arguments': '参数无法识别',
+          'policy-unavailable': '无法读取宿主权限', 'host-unverified': '此宿主版本尚未验证', 'guard-unavailable': '缺少硬拦截接口',
+          'settings-invalid': '设置无法读取，请重新保存开关', 'check-failed': '检查异常', 'approval-unavailable': '缺少有效单次审批',
+          'configuration-changed': '审批期间配置发生变化', cancelled: '操作取消',
+        };
+        const actions = { denied: '已阻止', 'approval-requested': '已申请审批', approved: '已获单次批准', rejected: '未获批准', cancelled: '已取消' };
+        return h('section', { className: 'fs-section', 'aria-label': '操作防护' },
+          h('div', { className: 'fs-section-head' }, h('h3', null, '操作防护'), status(state.error ? '状态未同步' : labels[value?.state] || '等待同步', value?.state === 'active' && !state.error ? 'on' : 'off')),
+          h('div', { className: 'fs-tools' }, h('span', { className: 'fs-switch' }, '启用操作防护', h(UI.Switch, {
+            label: '启用操作防护', checked: Boolean(value?.enabled), disabled: !value || Boolean(state.error) || state.busy,
+            onChange: enabled => controller.action('setOperationSafety', { enabled }),
+          }))),
+          h('p', { className: 'fs-note' }, '独立覆盖所有模型；暂停防空转监控或更改模型范围不影响操作防护。默认关闭，开启后硬拦截系统提权，并将只读修改、工作区外路径/工作目录及其他高危调用交给 DSH 原生弹窗单次确认。'),
+          state.safetyError && h('p', { className: 'fs-error', role: 'alert' }, state.safetyError),
+          value?.enabled && value.state === 'blocked' && h('p', { className: 'fs-error', role: 'alert' }, rules[value.reason] || '防护暂不可用，受保护工具已阻止；可关闭操作防护恢复宿主原有行为。'),
+          value && h(React.Fragment, null,
+            h('dl', { className: 'fs-facts' }, fact('已检查', value.checked), fact('已阻止 / 未获批准', value.denied), fact('审批请求', value.approvalRequests), fact('单次批准', value.approved), fact('宿主版本', value.hostVersion), fact('设置保存', value.persistent ? '重启后保留' : '仅本次运行')),
+            h('p', { className: 'fs-note' }, `覆盖工具：${value.coveredTools.join('、')}。只读模式仅放行一小部分简单读取命令；脚本识别有覆盖边界，操作防护不能代替系统沙盒。`),
+            value.events.length ? h('ol', { className: 'fs-events' }, ...value.events.slice(0, 20).map((event, index) => h('li', { key: `${event.time}-${index}`, className: 'fs-event' },
+              h('strong', null, `${actions[event.action] || event.action} · ${event.tool}`),
+              h('p', null, rules[event.rule] || event.rule), h('small', { className: 'fs-muted' }, `${time(event.time)} · ${event.session} · ${event.mode}`)))) : h('p', { className: 'fs-muted' }, '尚无操作防护记录。'),
+            h('p', { className: 'fs-note' }, '完整命令和参数在 DSH 原生审批中展示。此处及诊断导出仅保留原因与结果，不保存命令正文。')));
+      }
+      function ModelScope({ state }) {
+        const value = state.modelScope;
+        const [draft, setDraft] = React.useState(null), [query, setQuery] = React.useState('');
+        React.useEffect(() => { if (value) controller.refreshModels(); }, [Boolean(value)]);
+        const scope = draft?.scope ?? value?.scope ?? 'all', selections = draft?.selections ?? value?.selections ?? [];
+        const id = item => JSON.stringify([item.provider ?? null, item.model]);
+        const chosen = new Set(selections.map(id));
+        const options = new Map((value?.availableModels ?? []).map(item => [id(item), item]));
+        for (const item of selections) if (!options.has(id(item))) options.set(id(item), { ...item, label: item.model, providerLabel: item.provider ?? '任意渠道（配置项）' });
+        const filtered = [...options.values()].filter(item => `${item.label} ${item.model} ${item.providerLabel} ${item.provider ?? ''}`.toLowerCase().includes(query.toLowerCase()));
+        const disabled = !value || state.busy;
+        const select = (item, checked) => setDraft({ scope, selections: checked ? [...selections, { model: item.model, ...(item.provider === undefined ? {} : { provider: item.provider }) }]
+          : selections.filter(selected => id(selected) !== id(item)) });
+        const save = async () => {
+          await controller.action('setModelScope', { scope, selections });
+          if (!controller.snapshot().scopeError) setDraft(null);
+        };
+        return h('section', { className: 'fs-section', 'aria-label': '模型监控范围' },
+          h('div', { className: 'fs-section-head' }, h('h3', null, '监控范围'), command('刷新模型列表', controller.refreshModels, UI.IconRefreshOutlineRegular, disabled || state.scopeLoading)),
+          h('p', { className: 'fs-note' }, value ? `当前生效：${value.scope === 'all' ? '全部模型（所有渠道）' : `仅选中的 ${value.selections.length} 个模型`}` : '正在读取监控范围'),
+          h('fieldset', { className: 'fs-model-modes', disabled, 'aria-label': '监控模式' },
+            ...[['all', '全部模型'], ['selected', '仅选中的模型']].map(([key, label]) => h('label', { key },
+              h('input', { type: 'radio', name: 'flash-model-scope', value: key, checked: scope === key, onChange: () => setDraft({ scope: key, selections }) }), label))),
+          scope === 'selected' && h(React.Fragment, null,
+            h('input', { className: 'fs-model-search', type: 'search', value: query, placeholder: '搜索模型或渠道', 'aria-label': '搜索模型或渠道', onChange: event => setQuery(event.target.value) }),
+            h('div', { className: 'fs-model-list' }, filtered.length ? filtered.map(item => h('label', { className: 'fs-model-option', key: id(item) },
+              h('input', { type: 'checkbox', checked: chosen.has(id(item)), disabled, onChange: event => select(item, event.target.checked), 'aria-label': `${item.providerLabel} / ${item.model}` }),
+              h('span', null, item.label, h('small', null, `${item.providerLabel} · ${item.model}`))))
+              : h('p', { className: 'fs-muted' }, '暂无匹配模型。可刷新列表，或在宿主中使用一次该模型后再选择。')),
+            !selections.length && h('p', { className: 'fs-note' }, '尚未选择模型；保存后将不监控任何模型。')),
+          value?.catalogError && h('p', { className: 'fs-note' }, '部分渠道暂未返回模型列表，仍可选择已保存或已使用的模型。'),
+          value?.loadError && h('p', { className: 'fs-error' }, '上次保存的范围无法读取，当前使用配置中的范围，请重新保存。'),
+          state.scopeError && h('p', { className: 'fs-error', role: 'alert' }, state.scopeError),
+          state.scopeReadError && h('p', { className: 'fs-error', role: 'alert' }, state.scopeReadError),
+          command('保存监控范围', save, null, disabled || !draft),
+          h('p', { className: 'fs-note' }, `${value?.persistent ? '选择保存在当前配置环境，重启后保留。' : '此宿主未提供设置存储，选择仅在本次运行生效。'}取消选择立即停止跟踪并撤销待执行纠正；新加入的模型从下一次请求开始监控。`));
+      }
+      function Updates({ state }) {
+        const value = state.updates;
+        const phases = { unavailable: '此宿主不支持在线更新', idle: '尚未检查', checking: '正在检查', current: '已是最新正式版', available: '有新版本', 'waiting-idle': '等待所有对话空闲后安装', downloading: '正在下载并校验', installing: '正在交给 DSH 安装', 'restart-required': '已安装，需重启 DSH 生效', error: '更新未完成' };
+        const errors = { 'github-auth-or-release': '公开 Release 暂不可访问或尚未发布，请稍后重试。', 'github-denied': 'GitHub 暂时限制了访问，且公开更新清单暂不可用，请稍后重试。', 'invalid-release': 'Release 更新信息格式不正确，未安装。', 'missing-artifact': 'Release 缺少安装包或校验值。', 'checksum-failed': '安装包 SHA-256 校验失败，未安装。', 'incompatible-host': '新版本不支持当前 DSH 或 Node.js，未安装。', 'host-install-failed': 'DSH 未确认安装成功，请检查原生插件页。', 'storage-failed': '无法保存更新设置，自动更新未开启。', 'install-scripts': '安装包声明安装脚本，已拒绝自动安装。' };
+        const busy = state.updateBusy || ['checking', 'downloading', 'installing', 'restart-required'].includes(value?.phase);
+        return h('section', { className: 'fs-section', 'aria-label': '插件更新' },
+          h('div', { className: 'fs-section-head' }, h('h3', null, '插件更新'),
+            h('a', { className: 'fs-link', href: 'https://github.com/MyRemme/dsh-runtime-guard', target: '_blank', rel: 'noopener noreferrer', title: '打开 GitHub 仓库' }, icon(UI.IconLinkOutlineRegular), ' GitHub 仓库')),
+          h('dl', { className: 'fs-facts' }, fact('当前版本', value?.currentVersion || '读取中'), fact('最新正式版', value?.latestVersion || '尚未检查'), fact('更新状态', state.updateError || phases[value?.phase] || '连接中'), fact('最近检查', time(value?.checkedAt))),
+          h('div', { className: 'fs-tools', style: { marginTop: 12 } },
+            h('span', { className: 'fs-switch' }, '自动更新', h(UI.Switch, { label: '自动更新', checked: Boolean(value?.automatic), disabled: !value?.available || state.updateBusy, onChange: enabled => controller.updateAction('setAutomaticUpdates', { enabled }) })),
+            command('检查更新', () => controller.updateAction('checkUpdates'), UI.IconRefreshOutlineRegular, !value?.available || busy),
+            command('安装更新', () => controller.updateAction('installUpdate'), UI.IconDownloadOutlineRegular, !value?.available || busy || !['available', 'waiting-idle'].includes(value?.phase))),
+          h('p', { className: 'fs-note' }, '关闭自动更新会撤销等待中或下载中的自动安装；手动安装及已交给 DSH 的安装继续完成。排队中的手动安装固定所选版本，自动检查不会替换该任务。'),
+          value?.error && h('p', { className: 'fs-error', role: 'status' }, errors[value.error] || '下载、校验或安装未完成；当前版本继续保留，可检查更新后重试。'));
+      }
+      function SessionStatus({ sessionId }) {
+        const state = useState(), data = state.sessions[sessionId], error = state.sessionErrors[sessionId];
+        const [open, setOpen] = React.useState(false), [position, setPosition] = React.useState({});
+        const anchor = React.useRef(null), dialog = React.useRef(null), dialogId = React.useId();
+        React.useEffect(() => controller.watch(sessionId), [sessionId]);
+        React.useEffect(() => { setOpen(false); }, [sessionId]);
+        React.useLayoutEffect(() => {
+          if (!open) return;
+          const place = () => {
+            const rect = anchor.current.getBoundingClientRect(), width = Math.min(420, window.innerWidth - 24);
+            const above = rect.top - 20, below = window.innerHeight - rect.bottom - 20;
+            setPosition({ width, left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)),
+              ...(above >= below ? { bottom: window.innerHeight - rect.top + 8, maxHeight: Math.max(0, above) }
+                : { top: rect.bottom + 8, maxHeight: Math.max(0, below) }) });
+          };
+          const close = event => { if (event.type === 'keydown' && event.key !== 'Escape') return; if (event.type === 'pointerdown' && (dialog.current?.contains(event.target) || anchor.current?.contains(event.target))) return; setOpen(false); if (event.type === 'keydown') anchor.current?.focus(); };
+          place(); document.addEventListener('keydown', close); document.addEventListener('pointerdown', close); window.addEventListener('resize', place);
+          return () => { document.removeEventListener('keydown', close); document.removeEventListener('pointerdown', close); window.removeEventListener('resize', place); };
+        }, [open]);
+        let label = '连接中', tone = 'off';
+        if (error) label = '监控未连接';
+        else if (data) ({ label, tone } = health(data));
+        return h('div', { className: 'fs-dock', 'data-composer-stat': 'runtime-guard' },
+          h('button', { type: 'button', className: 'fs-dock-button', ref: anchor, 'data-tone': tone, title: '运行时护栏：' + label, 'aria-label': '运行时护栏：' + label, 'aria-expanded': open, 'aria-controls': open ? dialogId : undefined, 'aria-haspopup': 'dialog', onClick: () => setOpen(value => !value) }, icon(tone === 'warn' ? UI.IconWarningOutlineRegular : UI.IconShieldOutlineRegular, 12), h('span', { role: 'status' }, '护栏 · ' + label)),
+          open && createPortal(h('section', { id: dialogId, role: 'dialog', 'aria-label': '此对话的防空转记录', className: 'fs-dialog', ref: dialog, style: position },
+            h('div', { className: 'fs-head' }, h('h3', null, '此对话 · 运行时护栏'), h('div', { className: 'fs-tools' }, data && command(data.sessionEnabled === false || data.coverage === 'disabled' ? '启用此对话监控' : '暂停此对话监控', () => controller.action('setSessionEnabled', { sessionId, enabled: data.sessionEnabled === false || data.coverage === 'disabled' }), null, state.busy), command('关闭', () => { setOpen(false); anchor.current?.focus(); }, UI.IconCloseOutlineRegular, false, true))),
+            error ? h('p', { className: 'fs-error' }, error) : data && h(React.Fragment, null,
+              h('p', { className: 'fs-muted' }, label), h('dl', { className: 'fs-stats' }, stat('已监控', data.monitoredRequests), stat('确认重复', data.confirmed), stat('请求中断', data.cancelRequested), stat('已提交纠正', data.recoverySubmitted)),
+              h(Live, { data }),
+              h('dl', { className: 'fs-facts' }, fact('模式', modeName(data.mode)), fact('拦截动作', data.latestEvent?.action === 'stop-confirmed' ? `宿主已确认停止（累计请求中断 ${data.cancelRequested} 次）` : data.cancelRequested ? `已请求中断 ${data.cancelRequested} 次，需以宿主结果为准` : '无，未中断模型或工具'), fact('最近监控', time(data.lastMonitoredAt))),
+              data.events.length ? h(Events, { events: data.events, mode: data.mode }) : h('p', { className: 'fs-muted' }, data.coverage === 'checked' ? '最近已检查的输出中未发现符合规则的重复。' : '尚无检测事件。'),
+              h('p', { className: 'fs-note' }, '每 2 秒同步。暂未发现循环只描述已收到的输出，不能保证后续不会重复。计数在重新跟踪或插件重载后重置；详情取自全局最近 100 条事件。'))), document.body));
+      }
+      function Icon() {
+        const { data, error } = useState();
+        return h('span', { className: 'fs-icon', title: error || `运行时护栏 · ${data?.monitoring ? '在线' : '暂停'}` }, icon(UI.IconShieldOutlineRegular, 20), h('i', { className: 'fs-dot', style: { background: error || data?.confirmed ? 'var(--dsw-alias-state-warn-primary)' : undefined } }));
+      }
+      function Toast() {
+        const { toast, data } = useState(); if (!toast) return null;
+        const text = explain(toast, data?.mode);
+        return h('aside', { className: 'fs-toast', role: 'alert' }, h('strong', null, '护栏 · ' + text.title), h('p', null, text.result), h('div', { className: 'fs-row' }, command('查看记录', () => { ctx.layout.selectPanel(PANEL); controller.dismiss(); }, UI.IconInfoOutlineRegular), command('关闭', controller.dismiss, UI.IconCloseOutlineRegular, false, true)));
+      }
+      ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL }, Panel));
+      ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL, order: 20, label: () => '运行时护栏' }, Icon));
+      ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({ name: 'plugins.bundle.config', key: 'dsh-runtime-guard' }, Panel));
+      ctx.slots.inject('plugins.row.config', () => ctx.slots.register({ name: 'plugins.row.config', key: 'dsh-runtime-guard#runtime-guard' }, Panel));
+      ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({ name: 'conversation.composer.dock', id: 'runtime-guard', order: 2, inject: sessionId => ({ sessionId }) }, SessionStatus));
+      ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'runtime-guard.alert' }, Toast));
+    }
+    return { inject: ['slots', 'connection', 'layout'], apply };
+  },
+});
