@@ -56,7 +56,6 @@ assert.ok(Number.isSafeInteger(assetId) && assetId > 0);
 const metadata = Buffer.from(JSON.stringify({ schemaVersion: 1, version: pkg.version,
   name: `${pkg.name}-${pkg.version}.tgz`, size: data.length, sha256, assetId }, null, 2) + '\n');
 await writeFile(resolve('artifacts/update.json'), metadata);
-await request(`${upload}?name=update.json`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: metadata });
 const published = await request(`${base}/releases/${release.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draft: false }) });
 // Only advance the stable feed after all assets are uploaded and publicly released.
 const feed = await request(`${base}/contents/updates/stable.json?ref=main`);
