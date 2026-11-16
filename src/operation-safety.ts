@@ -34,7 +34,7 @@ interface ApprovalService {
 const reasons: Record<Rule, string> = {
   elevation: '禁止通过工具借道系统提权。请由用户在工具之外自行处理管理员操作。',
   'outside-workspace': '目标路径或工作目录超出当前工作区，需要用户在确认弹窗中明确批准本次操作。',
-  'read-only-write': '当前为只读模式，此调用包含修改操作，需要用户确认是否执行（宿主只读沙盒仍保留最终拦截权限）。',
+  'read-only-write': '当前为仅查看模式，不能修改文件。需要修改时，请由用户切换为仅工作区修改或完全权限；工具参数不能代替模式切换。',
   'read-only-unknown': '只读模式无法确认此命令仅进行读取，需要用户确认是否执行（建议优先使用宿主读取工具）。',
   destructive: '此调用包含删除、覆盖历史或系统配置修改，需要批准本次具体操作。',
   'opaque-execution': '此调用包含脚本、动态执行或启动其他程序，需要批准本次具体操作。',
@@ -90,15 +90,20 @@ export function isPathUnderSync(targetPath: string, workspaceRoot: string, baseD
 function extractShellPathTokens(command: string): string[] {
   const tokens: string[] = [];
   const rawTokens: string[] = [];
-  const matcher = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  for (const match of command.matchAll(matcher)) {
-    const quoted = match[1] ?? match[2];
-    if (quoted !== undefined) rawTokens.push(quoted);
-    else if (match[3]) rawTokens.push(match[3]);
+  // PowerShell also permits quotes inside a token: -LiteralPath:"C:\\some folder\\file".
+  let token = '', quote = '';
+  for (const char of command) {
+    if (quote) { if (char === quote) quote = ''; else token += char; }
+    else if (char === '"' || char === "'") quote = char;
+    else if (/\s/.test(char)) { if (token) rawTokens.push(token); token = ''; }
+    else token += char;
   }
+  if (token) rawTokens.push(token);
   for (const entry of rawTokens) {
-    const cleaned = entry.replace(/^(?:\d?>>?|<)+/, '').replace(/[,;]+$/, '');
+    let cleaned = entry.replace(/^(?:\d?>>?|<)+/, '').replace(/[,;]+$/, '');
     if (!cleaned || /^https?:\/\//i.test(cleaned)) continue;
+    const boundPath = /^(?:-(?:literalpath|path|filepath|destination|source|target|outfile):|--output=)(.+)$/i.exec(cleaned);
+    if (boundPath) cleaned = boundPath[1]!;
     if (/^-[A-Za-z]/.test(cleaned)) continue;
     const looksLikePath = /^(?:~(?:$|[/\\])|[A-Za-z]:[/\\]|\\\\|\/\/|\.\.(?:[/\\]|$)|\.[/\\]|%[^%]+%|\$(?:env:|home\b))/i.test(cleaned)
       || (cleaned.startsWith('/') && cleaned.length > 1 && !/^\/[A-Za-z0-9]{1,8}$/.test(cleaned))
@@ -121,7 +126,7 @@ function resolveWorkdir(args: Record<string, unknown>, workspaceRoot: string): {
 
 function extractPatchPaths(patch: string): string[] {
   const paths: string[] = [];
-  for (const match of patch.matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to):[ \t]*(.+)$/gm)) {
+  for (const match of patch.matchAll(/^[^\S\r\n]*\*\*\* (?:Add File|Update File|Delete File|Move to):[ \t]*(.+)$/gm)) {
     const target = match[1]?.trim();
     if (target) paths.push(target);
   }
@@ -166,6 +171,8 @@ function extractWritePaths(name: string, args: Record<string, unknown>): { ok: t
 /** Conservative recognition, not a shell parser or an OS sandbox. Inspect nested literal payloads too. */
 export function assessCommand(command: string, mode: Mode, workdir?: string, workspaceRoot?: string): Assessment {
   if (!command.trim() || command.length > 65536 || command.includes('\0')) return { kind: 'deny', rule: 'invalid-arguments' };
+  // A valid host-resolved full-access choice delegates to native tool/OS policy.
+  if (mode === 'danger-full-access') return { kind: 'allow' };
   const text = command.replace(/`\r?\n/g, '').replace(/[`^]/g, '').toLowerCase();
   if (/\brunas(?:\.exe)?\b|\bshellexecute\b|elevation:administrator/.test(text)
     || /\b(?:start-process|saps)\b[\s\S]*?-(?:verb|v)\s+['"]?runas\b/.test(text)
@@ -175,13 +182,19 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
   const destructive = commandWord('(?:remove-item|ri|rm|del|erase|rmdir|rd|unlink|clear-content|format(?:\\.com)?|diskpart|bcdedit|takeown|icacls)')
     || /\breg(?:\.exe)?\s+(?:add|delete|import|restore)\b|\bgit\s+(?:reset\b[^\r\n]*--hard|clean\b|push\b[^\r\n]*--force)/.test(text);
   const modifies = destructive || commandWord('(?:set-content|add-content|out-file|new-item|ni|copy-item|cp|copy|move-item|mv|move|rename-item|ren|mkdir|md|touch|tee|set-item|set-itemproperty|remove-itemproperty|new-itemproperty|clear-itemproperty|set-acl|set-service|stop-service|restart-service|set-ciminstance|invoke-cimmethod)')
-    || /(?:^|[^<])>{1,2}|\bgit\s+(?:add|commit|checkout|switch|restore|merge|rebase|cherry-pick|revert|stash|pull|fetch|config)\b/.test(text);
-  const outside = workspaceRoot && mode !== 'danger-full-access'
+    || /(?:^|[^<])>{1,2}|\bgit\s+(?:add|commit|checkout|switch|restore|merge|rebase|cherry-pick|revert|stash|pull|fetch|config)\b|\bgit\s+[\s\S]*--output(?:=|\s)/.test(text);
+  const literalRead = !modifies && !/[`$;&<>(){}\r\n]/.test(command) && !/--(?:pre|ext-diff|textconv|output)\b/i.test(command)
+    && command.split('|').every(part => /^(?:get-content|get-item|get-childitem|get-location|get-filehash|get-process|test-path|select-string|select-object|measure-object|compare-object|write-output|write-host|echo|pwd|ls|cat|head|tail|stat|wc|rg|grep)(?:\s|$)/i.test(part.trim())
+      || /^git\s+(?:status|diff|log|show|ls-files|ls-tree|rev-parse)(?:\s|$)/i.test(part.trim()));
+  // Native read tools already allow reads outside the workspace. File modes
+  // constrain modifications, not every path appearing in a read command.
+  if (literalRead) return { kind: 'allow' };
+  const outside = workspaceRoot
     ? ((workdir && !isPathUnderSync(workdir, workspaceRoot))
       || extractShellPathTokens(command).some(token => !isPathUnderSync(token, workspaceRoot, workdir ?? workspaceRoot)))
     : false;
   if (mode === 'read-only') {
-    if (modifies) return { kind: 'ask', rule: 'read-only-write' };
+    if (modifies) return { kind: 'deny', rule: 'read-only-write' };
     if (outside) return { kind: 'ask', rule: 'outside-workspace' };
     // Only a small literal cmdlet subset is admitted. Pipelines, native shells,
     // expressions, script blocks and indirection remain outside this subset.
@@ -190,6 +203,11 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
   }
   if (destructive) return { kind: 'ask', rule: 'destructive' };
   if (outside) return { kind: 'ask', rule: 'outside-workspace' };
+  // Ordinary workspace build/test/script commands use the standing native
+  // workspace sandbox. They are not an escalation merely because they run code.
+  const development = /^(?:npm(?:\.cmd)?|pnpm(?:\.cmd)?|npx(?:\.cmd)?|yarn(?:\.cmd)?|bun|node(?:\.exe)?|python(?:3|\.exe)?|py|pytest|tsc|vitest|jest|go|cargo|dotnet|cmake|make|git)(?:\s|$)/i.test(command.trim());
+  if (development && !/[;&|`\r\n]/.test(command)
+    && !/\brunas\b|shellexecute|\b(?:invoke-expression|iex|start-process|saps)\b|-(?:encodedcommand|enc|ec)\b/i.test(text)) return { kind: 'allow' };
   if (commandWord('(?:invoke-expression|iex|start-process|saps|cmd(?:\\.exe)?|powershell(?:\\.exe)?|pwsh(?:\\.exe)?|bash|sh|wscript(?:\\.exe)?|cscript(?:\\.exe)?|mshta(?:\\.exe)?|python(?:3|\\.exe)?|node(?:\\.exe)?)')
     || /-(?:encodedcommand|enc|ec|e)\b|frombase64string|shell\.application|(?:^|[\s;])(?:&|\.)\s|\$\(|\.(?:ps1|bat|cmd|vbs|js|py)(?:\s|['"]|$)/.test(text)) return { kind: 'ask', rule: 'opaque-execution' };
   // Native executables and shell constructs outside the small understood set
@@ -255,19 +273,26 @@ export class OperationSafety {
     return policy as unknown as Policy;
   }
   private assessment(exec: ToolExecution, policy: Policy): Assessment {
+    // Capability and policy failures are still denied by inspect(). This branch
+    // honors only an actual per-session full-access policy from the host.
+    if (policy.mode === 'danger-full-access') return { kind: 'allow' };
     if (!isRecord(exec.arguments)) return { kind: 'deny', rule: 'invalid-arguments' };
     const args = exec.arguments;
     if ((SHELL_TOOLS as readonly string[]).includes(exec.name)) {
       const dir = resolveWorkdir(args, policy.workspaceRoot);
       const supplied = ['command', 'cmd', 'script', 'code'].filter(key => Object.hasOwn(args, key));
+      if (exec.name === 'ops_bash' && Object.hasOwn(args, 'script_path')) {
+        if (supplied.length || typeof args.script_path !== 'string' || !args.script_path.trim()
+          || args.script_path.length > 4096 || args.script_path.includes('\0') || (!dir.ok && dir.rule === 'invalid-arguments')) return { kind: 'deny', rule: 'invalid-arguments' };
+        if (policy.mode === 'read-only') return { kind: 'ask', rule: 'read-only-unknown' };
+        if (!dir.ok || !isPathUnderSync(args.script_path, policy.workspaceRoot, dir.workdir)) return { kind: 'ask', rule: 'outside-workspace' };
+        return { kind: 'allow' };
+      }
       if (supplied.length !== 1 || typeof args[supplied[0]!] !== 'string') return { kind: 'deny', rule: 'invalid-arguments' };
       const command = args[supplied[0]!] as string;
       if (!dir.ok && dir.rule === 'invalid-arguments') return { kind: 'deny', rule: 'invalid-arguments' };
       const workdir = dir.ok ? dir.workdir : (args.workdir ?? args.cwd) as string;
-      const result = assessCommand(command, policy.mode, workdir, policy.workspaceRoot);
-      if (result.kind === 'deny' || policy.mode === 'danger-full-access') return result;
-      if (!dir.ok) return { kind: 'ask', rule: 'outside-workspace' };
-      return result;
+      return assessCommand(command, policy.mode, workdir, policy.workspaceRoot);
     }
     if (exec.name === 'terminal_open') {
       const dir = resolveWorkdir(args, policy.workspaceRoot);
@@ -283,7 +308,7 @@ export class OperationSafety {
         if (!/^(?:pwsh|powershell|bash|sh|cmd)(?:\.exe)?$/i.test(args.shell.trim())) return { kind: 'ask', rule: 'opaque-execution' };
       }
       if (policy.mode === 'read-only') return { kind: 'ask', rule: 'read-only-unknown' };
-      if (!dir.ok && policy.mode !== 'danger-full-access') return { kind: 'ask', rule: 'outside-workspace' };
+      if (!dir.ok) return { kind: 'ask', rule: 'outside-workspace' };
       return { kind: 'allow' };
     }
     if (exec.name === 'terminal_send') {
@@ -295,29 +320,31 @@ export class OperationSafety {
       if (payload.length > 65536 || payload.includes('\0')) return { kind: 'deny', rule: 'invalid-arguments' };
       if (args.submit === false && /^[\x03\x04\x1a\x1b]$/.test(payload)) return { kind: 'allow' };
       const workdir = dir.ok ? dir.workdir : (args.workdir ?? args.cwd) as string;
-      const result = assessCommand(payload.trimEnd(), policy.mode, workdir, policy.workspaceRoot);
-      if (result.kind === 'deny' || policy.mode === 'danger-full-access') return result;
+      const result = payload.trim() ? assessCommand(payload.trimEnd(), policy.mode, workdir, policy.workspaceRoot) : { kind: 'allow' } as const;
+      if (result.kind === 'deny') return result;
       if (!dir.ok) return { kind: 'ask', rule: 'outside-workspace' };
-      return result;
+      // PTY input belongs to a live interpreter/cwd and may continue previous
+      // input. Only full access (handled above) delegates it without approval.
+      return { kind: 'ask', rule: 'opaque-execution' };
     }
     if (exec.name === 'str_replace_editor') {
       if (typeof args.command !== 'string' || !args.command.trim()) return { kind: 'deny', rule: 'invalid-arguments' };
       const extracted = extractWritePaths(exec.name, args);
       if (!extracted.ok || extracted.paths.length === 0) return { kind: 'deny', rule: 'invalid-arguments' };
       const subcommand = args.command.trim();
-      const outside = policy.mode !== 'danger-full-access' && extracted.paths.some(p => !isPathUnderSync(p, policy.workspaceRoot));
-      if (subcommand === 'view') return outside ? { kind: 'ask', rule: 'outside-workspace' } : { kind: 'allow' };
-      if (policy.mode === 'read-only') return { kind: 'ask', rule: 'read-only-write' };
+      const outside = extracted.paths.some(p => !isPathUnderSync(p, policy.workspaceRoot));
+      if (subcommand === 'view') return { kind: 'allow' };
+      if (policy.mode === 'read-only') return { kind: 'deny', rule: 'read-only-write' };
       if (outside) return { kind: 'ask', rule: 'outside-workspace' };
       if (!['create', 'str_replace', 'insert'].includes(subcommand)) return { kind: 'ask', rule: 'opaque-execution' };
       return { kind: 'allow' };
     }
     const extracted = extractWritePaths(exec.name, args);
-    if (!extracted.ok) return { kind: 'deny', rule: 'invalid-arguments' };
-    if (policy.mode === 'read-only') return { kind: 'ask', rule: 'read-only-write' };
+    if (!extracted.ok || extracted.paths.length === 0) return { kind: 'deny', rule: 'invalid-arguments' };
+    if (policy.mode === 'read-only') return { kind: 'deny', rule: 'read-only-write' };
     if ((DELETE_TOOLS as readonly string[]).includes(exec.name)) return { kind: 'ask', rule: 'destructive' };
-    if (exec.name === 'apply_patch' && Object.values(args).some(value => typeof value === 'string' && /^\*\*\* (?:Delete File|Move to):/m.test(value))) return { kind: 'ask', rule: 'destructive' };
-    if (policy.mode !== 'danger-full-access' && extracted.paths.some(p => !isPathUnderSync(p, policy.workspaceRoot))) return { kind: 'ask', rule: 'outside-workspace' };
+    if (exec.name === 'apply_patch' && Object.values(args).some(value => typeof value === 'string' && /^[^\S\r\n]*\*\*\* (?:Delete File|Move to):/m.test(value))) return { kind: 'ask', rule: 'destructive' };
+    if (extracted.paths.some(p => !isPathUnderSync(p, policy.workspaceRoot))) return { kind: 'ask', rule: 'outside-workspace' };
     return { kind: 'allow' };
   }
   private inspect(exec: ToolExecution): { assessment: Assessment; policy?: Policy } {

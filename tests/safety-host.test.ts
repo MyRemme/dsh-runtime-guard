@@ -8,7 +8,7 @@ for (const [root, version] of [['.', '0.2.2-rc.1'], ['.compat-cache/runtimes/0.2
     const { stdout } = await promisify(execFile)(process.execPath, ['scripts/safety-host-probe.mjs', root!, version!], { timeout: 30000, windowsHide: true });
     const result = JSON.parse(/SAFETY_PROBE_RESULT (.+)/.exec(stdout)![1]!);
     expect(result).toMatchObject({ version, status: 'passed', shellProcesses: 0, realDeletes: 0 });
-    for (const check of ['elevation-blocked-before-body', 'readonly-write-and-shell-routed-to-approval', 'outside-workspace-routed-to-approval', 'approval-rejection-no-body',
+    for (const check of ['elevation-blocked-before-body', 'readonly-mutations-denied-without-approval', 'workspace-development-unprompted', 'full-access-delegates-without-plugin-approval', 'outside-workspace-routed-to-approval', 'approval-rejection-no-body',
       'approval-grants-one-inert-body', 'next-invocation-requires-new-approval', 'real-approval-audit-pairs',
       'hard-denial-survives-pre-hook-allow', 'nested-tool-dispatch-guarded', 'independent-monitor-pause-session-pause-model-scope', 'redacted-diagnostics']) expect(result.checks).toContain(check);
   }, 35000);

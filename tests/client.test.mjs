@@ -57,6 +57,9 @@ it('shows independent operation protection, persists its toggle and reports unav
     return { ok: true, value: method === 'conversations' ? [] : { ...baseline(), monitoring, operationSafety: structuredClone(safety) } };
   });
   await mount(call);
+  const modeRules = document.querySelector('[aria-label="三种权限模式的放行与拦截规则"]').textContent;
+  expect(modeRules).toContain('仅查看'); expect(modeRules).toContain('仅工作区修改'); expect(modeRules).toContain('完全权限');
+  expect(modeRules).toContain('插件不额外拦截或审批');
   await act(async () => { button('启用操作防护').click(); });
   expect(call).toHaveBeenCalledWith('/runtime-guard', 'setOperationSafety', { enabled: true }, expect.any(AbortSignal));
   expect(button('启用操作防护').getAttribute('aria-checked')).toBe('true');

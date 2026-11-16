@@ -104,14 +104,14 @@ it('rechecks the approved arguments and policy at final dispatch', async () => {
 });
 it.each(['unavailable', 'cancelled', 'allowed', undefined])('rejects a non-grant approval outcome: %s', async outcome => {
   const f = fixture(); f.setOutcome(outcome);
-  expect((await f.run(f.execution('node script.js'))).kind).toBe('deny'); expect(f.bodies()).toBe(0);
+  expect((await f.run(f.execution('Invoke-Expression $payload'))).kind).toBe('deny'); expect(f.bodies()).toBe(0);
 });
 it('fails closed on malformed arguments, missing policy/approval and thrown checks', async () => {
   const f = fixture();
   for (const args of [null, [], { command: 3 }, { command: 'Get-Location', script: 'other' }]) {
     expect((await f.run(f.execution('', 'pwsh', args))).kind).toBe('deny');
   }
-  f.host.values.delete('approval'); expect((await f.run(f.execution('node script.js'))).kind).toBe('deny');
+  f.host.values.delete('approval'); expect((await f.run(f.execution('Invoke-Expression $payload'))).kind).toBe('deny');
   f.policy.resolve.mockImplementation(() => { throw Error('policy failed'); });
   expect((await f.run(f.execution('Get-Location'))).kind).toBe('deny');
   f.host.values.delete('sandboxPolicy'); expect(f.safety.status().state).toBe('blocked');
@@ -180,7 +180,7 @@ it('asks before patch deletion and unknown executable paths while allowing ordin
   expect((await f.run(f.execution('', 'edit', { path: 'fixture.txt', old_string: 'a', new_string: 'b' }))).kind).toBe('executed');
   expect(f.requests).toHaveLength(2); expect(f.bodies()).toBe(1);
 });
-it('routes read-only mutations and outside-workspace operations through DSH approval popups with path redaction', async () => {
+it('denies readonly mutations and requests approval for workspace escapes with path redaction', async () => {
   const f = fixture();
   f.setMode('read-only');
   expect((await f.run(f.execution('', 'write', { path: 'D:\\outside\\secret.txt', content: 'x', sandbox_permissions: 'danger-full-access' }))).kind).toBe('deny');
@@ -188,7 +188,7 @@ it('routes read-only mutations and outside-workspace operations through DSH appr
   expect((await f.run(f.execution('', 'str_replace_editor', { command: 'view', path: 'D:\\project\\a.txt' }))).kind).toBe('executed');
   expect((await f.run(f.execution('', 'str_replace_editor', { command: 'create', path: 'D:\\project\\a.txt', file_text: 'x' }))).kind).toBe('deny');
   expect((await f.run(f.execution('', 'terminal_open', { cwd: 'D:\\project' }))).kind).toBe('deny');
-  expect(f.requests).toHaveLength(4);
+  expect(f.requests).toHaveLength(1);
   expect(f.bodies()).toBe(1);
 
   f.setMode('workspace-write');
@@ -200,7 +200,7 @@ it('routes read-only mutations and outside-workspace operations through DSH appr
   expect((await f.run(f.execution('', 'pwsh', { command: 'Set-Content -LiteralPath note.txt -Value hi', workdir: 'C:\\outside' }))).kind).toBe('deny');
   expect((await f.run(f.execution('', 'terminal_open', { cwd: 'C:\\outside' }))).kind).toBe('deny');
   expect((await f.run(f.execution('', 'terminal_send', { input: 'Set-Content -LiteralPath C:\\outside\\a.txt -Value hi\n' }))).kind).toBe('deny');
-  expect(f.requests).toHaveLength(12);
+  expect(f.requests).toHaveLength(9);
   expect(JSON.stringify(f.safety.status())).not.toMatch(/D:\\\\outside|C:\\\\outside|secret\.txt|escape\.txt|app\.ts|outside\.ts|note\.txt/);
 
   f.setOutcome('allowed-once');
@@ -209,6 +209,97 @@ it('routes read-only mutations and outside-workspace operations through DSH appr
   expect((await f.run(f.execution('', 'str_replace_editor', { command: 'str_replace', path: 'D:\\project\\src\\app.ts', old_str: 'a', new_str: 'b' }))).kind).toBe('executed');
   expect((await f.run(f.execution('', 'write', { path: 'D:\\outside\\secret.txt', content: 'x' }))).kind).toBe('executed');
   expect(f.bodies()).toBe(5);
+});
+it.each(['read-only', 'workspace-write', 'danger-full-access'])('honors the session mode for ordinary reads and project work: %s', async mode => {
+  const f = fixture(); f.setMode(mode);
+  for (const command of ['rg --files', 'git status --short', 'Get-Content C:\\outside\\note.txt | Select-Object -First 5']) {
+    expect((await f.run(f.execution(command))).kind).toBe('executed');
+  }
+  expect((await f.run(f.execution('', 'str_replace_editor', { command: 'view', path: 'C:\\outside\\note.txt' }))).kind).toBe('executed');
+  for (const command of ['python export_conversation.py input.json output.md', 'node script.js', 'npm.cmd run build', 'pytest -q', 'git add src/app.ts']) {
+    expect((await f.run(f.execution(command))).kind).toBe(mode === 'read-only' ? 'deny' : 'executed');
+  }
+  for (const [name, args] of [
+    ['write', { path: 'src/app.ts', content: 'fixture' }],
+    ['edit', { path: 'src/app.ts', old_string: 'a', new_string: 'b' }],
+    ['apply_patch', { patch: '*** Begin Patch\n  *** Add File: src/new.ts\n+fixture\n*** End Patch' }],
+  ] as const) expect((await f.run(f.execution('', name, args))).kind).toBe(mode === 'read-only' ? 'deny' : 'executed');
+  if (mode !== 'read-only') expect(f.requests).toHaveLength(0);
+});
+it('delegates full access without plugin approvals while preserving other host denials and policy failures', async () => {
+  const f = fixture(); f.setMode('danger-full-access');
+  for (const command of ['Start-Process cmd.exe -Verb RunAs', 'Remove-Item C:\\outside\\fixture', 'Invoke-Expression $payload']) {
+    expect((await f.run(f.execution(command))).kind).toBe('executed');
+  }
+  expect((await f.run(f.execution('', 'write', { path: 'C:\\outside\\fixture', content: 'x' }))).kind).toBe('executed');
+  expect((await f.run(f.execution('', 'terminal_send', { sessionId: 'fixture-pty', text: '', submit: true }))).kind).toBe('executed');
+  expect(f.requests).toHaveLength(0);
+  f.host.on('tools/pre-execute', async () => ({ kind: 'deny', reason: 'native policy' }));
+  expect(await f.run(f.execution('Get-Location'))).toEqual({ kind: 'deny', reason: 'native policy' });
+  f.policy.resolve.mockImplementation(() => { throw Error('unavailable'); });
+  expect((await f.run(f.execution('Get-Location'))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('policy-unavailable');
+});
+it('does not reuse a policy from a different session or trust a tool permission argument', async () => {
+  const f = fixture();
+  f.agent.session = { header: { cwd: 'D:\\project' } };
+  f.policy.resolve.mockImplementation((...params: any[]) => ({ mode: params[0]?.session === f.agent.session ? 'workspace-write' : 'read-only', workspaceRoot: 'D:\\project' }));
+  const args = { path: 'src/app.ts', content: 'x', sandbox_permissions: 'danger-full-access' };
+  expect((await f.run(f.execution('', 'write', args))).kind).toBe('executed');
+  expect((await f.run({ ...f.execution('', 'write', args), agent: makeAgent('another-session') })).kind).toBe('deny');
+});
+it('detects colon-bound PowerShell paths and indented native patch headers', async () => {
+  const f = fixture();
+  for (const command of ['Set-Content -LiteralPath:C:\\outside\\a.txt -Value x', 'Set-Content -LiteralPath:"C:\\outside folder\\a.txt" -Value x']) {
+    expect((await f.run(f.execution(command))).kind).toBe('deny');
+    expect(f.safety.status().events[0]?.rule).toBe('outside-workspace');
+  }
+  for (const patch of ['*** Begin Patch\n  *** Add File: C:\\outside\\a.txt\n+x\n*** End Patch', '*** Begin Patch\n  *** Delete File: a.txt\n*** End Patch']) {
+    expect((await f.run(f.execution('', 'apply_patch', { patch }))).kind).toBe('deny');
+  }
+  expect(f.requests).toHaveLength(4);
+  expect(f.safety.status().events[0]?.rule).toBe('destructive');
+  f.setOutcome('allowed-once');
+  expect((await f.run(f.execution('Set-Content -LiteralPath:"D:\\project\\a folder\\a.txt" -Value x'))).kind).toBe('executed');
+  expect(f.requests).toHaveLength(4);
+});
+it('requires a fresh approval for live terminal input including empty Enter in restricted modes', async () => {
+  const f = fixture(); f.setOutcome('allowed-once');
+  expect((await f.run(f.execution('', 'terminal_open', { type: 'pwsh', cwd: 'C:\\outside' }))).kind).toBe('executed');
+  f.setOutcome('rejected');
+  for (const text of ['Set-Content relative.txt x', 'Get-Location', '']) {
+    expect((await f.run(f.execution('', 'terminal_send', { sessionId: 'outside-pty', text, submit: true }))).kind).toBe('deny');
+    expect(f.safety.status().events[0]?.rule).toBe('opaque-execution');
+  }
+  expect(f.requests).toHaveLength(4);
+  f.setOutcome('allowed-once');
+  expect((await f.run(f.execution('', 'terminal_send', { sessionId: 'outside-pty', text: '', submit: true }))).kind).toBe('executed');
+  f.setMode('read-only');
+  expect((await f.run(f.execution('', 'terminal_send', { sessionId: 'outside-pty', text: 'Set-Content a.txt x', submit: true }))).kind).toBe('deny');
+  expect(f.requests).toHaveLength(5);
+});
+it('does not classify git output writes or external processors as readonly commands', () => {
+  for (const command of ['git diff --output=C:\\outside\\a.txt', 'git log --output=C:\\outside\\a.txt', 'rg --pre=custom.exe fixture', 'git diff --ext-diff']) {
+    expect(assessCommand(command, 'read-only', 'D:\\project', 'D:\\project').kind).not.toBe('allow');
+  }
+});
+it('admits OPS workspace script paths and asks for readonly or outside scripts', async () => {
+  const f = fixture();
+  expect((await f.run(f.execution('', 'ops_bash', { script_path: 'scripts/build.sh', workdir: 'D:\\project' }))).kind).toBe('executed');
+  expect(f.requests).toHaveLength(0);
+  expect((await f.run(f.execution('', 'ops_bash', { script_path: 'C:\\outside\\build.sh' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('outside-workspace');
+  f.setMode('read-only');
+  expect((await f.run(f.execution('', 'ops_bash', { script_path: 'scripts/build.sh' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('read-only-unknown');
+  expect(f.requests).toHaveLength(2);
+  expect((await f.run(f.execution('', 'ops_bash', { script_path: 'scripts/build.sh', command: 'echo other' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('invalid-arguments');
+});
+it('does not extend project command admission to chained unknown execution', () => {
+  for (const command of ['npm run build; custom-tool', 'git status && custom-tool', 'python script.py | custom-tool', 'node script.js\ncustom-tool']) {
+    expect(assessCommand(command, 'workspace-write', 'D:\\project', 'D:\\project').kind).toBe('ask');
+  }
 });
 it('detects symlink/junction workspace escapes cleanly', async () => {
   const root = await directory();
