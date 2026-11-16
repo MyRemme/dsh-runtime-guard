@@ -59,6 +59,34 @@ it('keeps one page mounted and navigates tabs with the keyboard', async () => {
   expect(document.querySelector('[aria-label="逐对话实时监控"]')).toBeNull();
   expect(document.querySelector('[aria-label="操作防护"]')).not.toBeNull();
 });
+it('switches narrow monitor lists and opens a conversation record in the event pane', async () => {
+  const items = ['a', 'b'].map(id => ({ ...sessionData(), sessionId: id, sessionKey: 'key-' + id, tracked: true }));
+  const events = items.map(item => ({ kind: 'tool-repeat', session: item.sessionKey, repeats: 4 }));
+  await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? items : { ...baseline(), events } }));
+  expect(document.querySelector('.fs-monitor').dataset.pane).toBe('conversations');
+  await act(async () => { button('查看此对话记录').click(); });
+  expect(document.querySelector('.fs-monitor').dataset.pane).toBe('events');
+  expect(button('检测记录').getAttribute('aria-pressed')).toBe('true');
+  expect(document.querySelectorAll('.fs-event')).toHaveLength(1);
+  await act(async () => { button('显示全部对话').click(); button('对话列表').click(); });
+  expect(document.querySelector('.fs-monitor').dataset.pane).toBe('conversations');
+  expect(document.querySelectorAll('.fs-event')).toHaveLength(2);
+});
+it('keeps open event evidence through polling and mounts a fresh page only when navigating', async () => {
+  const data = { ...baseline(), events: [{ kind: 'tool-repeat', session: 'a', repeats: 4 }] };
+  await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : data }));
+  const panel = document.querySelector('[role="tabpanel"]'), details = panel.querySelector('.fs-event details');
+  details.open = true;
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+  expect(document.querySelector('[role="tabpanel"]')).toBe(panel);
+  expect(document.querySelector('.fs-event details')).toBe(details);
+  expect(details.open).toBe(true);
+  await selectTab('监控设置');
+  expect(document.querySelector('[role="tabpanel"]')).not.toBe(panel);
+  const tab = document.querySelector('[role="tab"][aria-selected="true"]');
+  await act(async () => { tab.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })); });
+  expect(document.activeElement.textContent).toBe('操作防护');
+});
 it('preserves filters and scroll across fullscreen, traps focus, restores the page and cleans up on unmount', async () => {
   const items = ['a', 'b'].map(id => ({ ...sessionData(), sessionId: id, sessionKey: 'key-' + id, tracked: true }));
   const event = { kind: 'tool-repeat', repeats: 4, session: 'key-a' };
@@ -75,9 +103,9 @@ it('preserves filters and scroll across fullscreen, traps focus, restores the pa
   expect(document.querySelector('[aria-label="对话列表"]')).toBe(scroll);
   expect(scroll.scrollTop).toBe(42);
   expect(button('显示全部对话')).toBeDefined();
-  const last = document.querySelector('[aria-label="检测记录"]');
+  const last = document.querySelector('[aria-label="检测记录"] summary');
   await act(async () => { last.focus(); last.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true })); });
-  expect(document.activeElement).toBe(button('启用监控'));
+  expect(document.activeElement).toBe(document.querySelector('[role="tab"][aria-selected="true"]'));
   await act(async () => { document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   expect(document.querySelector('[aria-modal="true"]')).toBeNull();
   expect(document.activeElement).toBe(expand);
