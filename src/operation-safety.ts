@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { PROFILE_DIR, readProfileJsonSync, writeProfileFile } from './profile-file.js';
 import { sessionKey } from './metrics.js';
 import type { HostContext, PreToolDecision, ToolExecution } from './types.js';
@@ -10,8 +10,13 @@ export const SAFETY_HOSTS = ['0.2.1-rc.2', '0.2.2-rc.1'] as const;
 const SHELL_TOOLS = ['pwsh', 'bash', 'ops_bash', 'exec_command'] as const;
 const TERMINAL_TOOLS = ['terminal_open', 'terminal_send'] as const;
 const WRITE_TOOLS = ['write', 'edit', 'apply_patch', 'multi_edit', 'str_replace_editor'] as const;
-const DELETE_TOOLS = ['delete', 'remove_file', 'delete_file'] as const;
-export const SAFETY_TOOLS: readonly string[] = [...SHELL_TOOLS, ...TERMINAL_TOOLS, ...WRITE_TOOLS, ...DELETE_TOOLS];
+const OPS_WRITE_TOOLS = ['ops_write_file', 'ops_edit_file', 'ops_replace', 'ops_copy', 'ops_move'] as const;
+const DELETE_TOOLS = ['delete', 'remove_file', 'delete_file', 'ops_remove'] as const;
+const BATCH_TOOLS = ['ops_batch'] as const;
+const CODE_TOOLS = ['run_code'] as const;
+export const SAFETY_TOOLS: readonly string[] = [
+  ...SHELL_TOOLS, ...TERMINAL_TOOLS, ...WRITE_TOOLS, ...OPS_WRITE_TOOLS, ...DELETE_TOOLS, ...BATCH_TOOLS, ...CODE_TOOLS,
+];
 type Mode = 'read-only' | 'workspace-write' | 'danger-full-access';
 interface Policy { mode: Mode; workspaceRoot: string }
 type Rule = 'elevation' | 'outside-workspace' | 'read-only-write' | 'read-only-unknown' | 'destructive' | 'opaque-execution'
@@ -71,20 +76,56 @@ function canonicalizeSync(target: string): string {
   }
 }
 
+const isRelativeInside = (rel: string): boolean =>
+  rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel));
+
 export function isPathUnderSync(targetPath: string, workspaceRoot: string, baseDir: string = workspaceRoot): boolean {
   if (!targetPath || targetPath.includes('\0') || workspaceRoot.includes('\0')) return false;
-  // Unresolved user/home/env/UNC paths or POSIX roots on Windows cannot be pinned inside the workspace.
-  if (/^(?:~(?:$|[/\\])|%[^%]+%|\\{2}|\/\/|\$(?:env:|home\b))/i.test(targetPath)) return false;
-  if (process.platform === 'win32' && targetPath.startsWith('/')) {
-    const driveRel = win32.relative(foldPath(workspaceRoot), foldPath(resolve(baseDir, targetPath)));
-    if (driveRel === '' || (!driveRel.startsWith('..') && !win32.isAbsolute(driveRel))) return false;
-    return false;
-  }
+  // Unresolved user/home/env/UNC/file-URI/drive-relative paths or POSIX roots on Windows cannot be pinned inside workspace.
+  if (/^(?:~(?:$|[/\\])|%[^%]+%|\\{2}|\/\/|file:|\$(?:env:|home\b|\{|[A-Za-z_][A-Za-z0-9_]*)|[A-Za-z]:(?![/\\]))/i.test(targetPath)) return false;
+  const winContext = process.platform === 'win32' || /^[A-Za-z]:[/\\]/.test(workspaceRoot);
+  if (winContext && (targetPath.startsWith('/') || targetPath.replace(/^[A-Za-z]:/, '').includes(':'))) return false;
   const resolvedBase = canonicalizeSync(resolve(workspaceRoot, baseDir));
   const canonRoot = foldPath(canonicalizeSync(workspaceRoot));
   const canonTarget = foldPath(canonicalizeSync(resolve(resolvedBase, targetPath)));
-  const rel = relative(canonRoot, canonTarget);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  return isRelativeInside(relative(canonRoot, canonTarget));
+}
+
+function splitUnquotedPipes(command: string): string[] {
+  const parts: string[] = [];
+  let current = '', quote = '';
+  for (const char of command) {
+    if (quote) {
+      if (char === quote) quote = '';
+      current += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+    } else if (char === '|') {
+      parts.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  parts.push(current);
+  return parts;
+}
+
+function hasExpandableDollar(command: string): boolean {
+  let quote = '';
+  for (const char of command) {
+    if (quote === "'") { if (char === "'") quote = ''; }
+    else if (quote === '"') { if (char === '"') quote = ''; else if (char === '$') return true; }
+    else if (char === '"' || char === "'") quote = char;
+    else if (char === '$') return true;
+  }
+  return false;
+}
+
+function stripSafeQuotesForCommandScan(command: string): string {
+  // Mask literal strings that cannot invoke subshells while keeping double-quoted $() expansions visible.
+  return command.replace(/'[^']*'|"([^"]*)"/g, (whole, dbl: string | undefined) => (dbl?.includes('$') ? whole : ' '));
 }
 
 function extractShellPathTokens(command: string): string[] {
@@ -92,21 +133,23 @@ function extractShellPathTokens(command: string): string[] {
   const rawTokens: string[] = [];
   // PowerShell also permits quotes inside a token: -LiteralPath:"C:\\some folder\\file".
   let token = '', quote = '';
+  const flush = () => { if (token) rawTokens.push(token); token = ''; };
   for (const char of command) {
     if (quote) { if (char === quote) quote = ''; else token += char; }
     else if (char === '"' || char === "'") quote = char;
-    else if (/\s/.test(char)) { if (token) rawTokens.push(token); token = ''; }
+    else if (/\s|[><;|&]/.test(char)) flush();
     else token += char;
   }
-  if (token) rawTokens.push(token);
+  flush();
   for (const entry of rawTokens) {
-    let cleaned = entry.replace(/^(?:\d?>>?|<)+/, '').replace(/[,;]+$/, '');
+    let cleaned = entry.replace(/[,;]+$/, '');
     if (!cleaned || /^https?:\/\//i.test(cleaned)) continue;
-    const boundPath = /^(?:-(?:literalpath|path|filepath|destination|source|target|outfile):|--output=)(.+)$/i.exec(cleaned);
-    if (boundPath) cleaned = boundPath[1]!;
+    const boundPath = /^(?:--?[A-Za-z][A-Za-z0-9_-]*[:=]|[A-Za-z_][A-Za-z0-9_]*=)(.+)$/.exec(cleaned);
+    if (boundPath) cleaned = boundPath[1]!.replace(/^['"]|['"]$/g, '');
     if (/^-[A-Za-z]/.test(cleaned)) continue;
-    const looksLikePath = /^(?:~(?:$|[/\\])|[A-Za-z]:[/\\]|\\\\|\/\/|\.\.(?:[/\\]|$)|\.[/\\]|%[^%]+%|\$(?:env:|home\b))/i.test(cleaned)
+    const looksLikePath = /^(?:~(?:$|[/\\])|[A-Za-z]:|\\{2}|\/\/|file:|\.\.(?:[/\\]|$)|\.[/\\]|%[^%]+%|\$(?:env:|home\b|\{|[A-Za-z_]))/i.test(cleaned)
       || (cleaned.startsWith('/') && cleaned.length > 1 && !/^\/[A-Za-z0-9]{1,8}$/.test(cleaned))
+      || /\.[A-Za-z0-9]{1,12}:[^\s\\/:]/.test(cleaned)
       || (!/\s/.test(cleaned) && /[/\\]/.test(cleaned));
     if (looksLikePath) tokens.push(cleaned);
   }
@@ -124,26 +167,38 @@ function resolveWorkdir(args: Record<string, unknown>, workspaceRoot: string): {
   return { ok: true, workdir: resolve(workspaceRoot, target) };
 }
 
-function extractPatchPaths(patch: string): string[] {
+function extractPatchInfo(patch: string): { paths: string[]; destructive: boolean } {
   const paths: string[] = [];
-  for (const match of patch.matchAll(/^[^\S\r\n]*\*\*\* (?:Add File|Update File|Delete File|Move to):[ \t]*(.+)$/gm)) {
-    const target = match[1]?.trim();
+  let destructive = false;
+  for (const match of patch.matchAll(/^[^\S\r\n]*\*\*\* (?:(Add File|Update File)|(Delete File|Move to)):[ \t]*(.+)$/gm)) {
+    if (match[2]) destructive = true;
+    const target = match[3]?.trim();
     if (target) paths.push(target);
   }
   for (const match of patch.matchAll(/^(?:\+\+\+|---)[ \t]+(?:[ab]\/)?([^\t\r\n]+)$/gm)) {
     const target = match[1]?.trim();
-    if (target && target !== '/dev/null') paths.push(target);
+    if (target === '/dev/null') {
+      if (match[0].startsWith('+++')) destructive = true;
+    } else if (target) paths.push(target);
   }
-  return paths;
+  for (const match of patch.matchAll(/^(?:rename|copy) (?:from|to)[ \t]+([^\r\n]+)$/gm)) {
+    const target = match[1]?.trim();
+    if (target) paths.push(target);
+  }
+  return { paths, destructive };
 }
 
-function extractWritePaths(name: string, args: Record<string, unknown>): { ok: true; paths: string[] } | { ok: false } {
+const isValidTextArg = (value: unknown, max = 4096): value is string =>
+  typeof value === 'string' && !!value.trim() && !value.includes('\0') && value.length <= max;
+
+function extractWritePaths(name: string, args: Record<string, unknown>): { ok: true; paths: string[]; destructive: boolean } | { ok: false } {
   const paths: string[] = [];
+  let destructive = false;
   const collectField = (record: Record<string, unknown>, keys: readonly string[]): boolean => {
     for (const key of keys) {
       if (!Object.hasOwn(record, key) || record[key] === undefined) continue;
       const value = record[key];
-      if (typeof value !== 'string' || !value.trim() || value.includes('\0') || value.length > 4096) return false;
+      if (!isValidTextArg(value)) return false;
       paths.push(value.trim());
     }
     return true;
@@ -153,11 +208,15 @@ function extractWritePaths(name: string, args: Record<string, unknown>): { ok: t
       if (Object.hasOwn(args, key) && args[key] !== undefined && typeof args[key] !== 'string') return { ok: false };
     }
     for (const value of Object.values(args)) {
-      if (typeof value === 'string') paths.push(...extractPatchPaths(value));
+      if (typeof value === 'string') {
+        const info = extractPatchInfo(value);
+        paths.push(...info.paths);
+        if (info.destructive) destructive = true;
+      }
     }
-    return { ok: true, paths };
+    return { ok: true, paths, destructive };
   }
-  const pathKeys = ['path', 'filePath', 'file_path', 'target', 'target_file', 'destination', 'dest', 'source', 'src'] as const;
+  const pathKeys = ['path', 'filePath', 'file_path', 'target', 'target_file', 'destination', 'dest', 'to', 'source', 'src'] as const;
   if (!collectField(args, pathKeys)) return { ok: false };
   if (name === 'multi_edit' && Object.hasOwn(args, 'edits') && args.edits !== undefined) {
     if (!Array.isArray(args.edits)) return { ok: false };
@@ -165,7 +224,129 @@ function extractWritePaths(name: string, args: Record<string, unknown>): { ok: t
       if (!isRecord(entry) || !collectField(entry, ['path', 'filePath', 'file_path', 'target', 'target_file'])) return { ok: false };
     }
   }
-  return { ok: true, paths };
+  return { ok: true, paths, destructive };
+}
+
+function assessOpsFile(name: string, args: Record<string, unknown>, policy: Policy): Assessment {
+  if (Object.hasOwn(args, 'dryRun') && args.dryRun !== undefined && typeof args.dryRun !== 'boolean') {
+    return { kind: 'deny', rule: 'invalid-arguments' };
+  }
+  const dir = resolveWorkdir(args, policy.workspaceRoot);
+  if (!dir.ok && dir.rule === 'invalid-arguments') return { kind: 'deny', rule: 'invalid-arguments' };
+  const baseDir = dir.ok ? dir.workdir : policy.workspaceRoot;
+  const checkPath = (value: unknown): string | null => (isValidTextArg(value) ? value.trim() : null);
+  const paths: string[] = [];
+  if (name === 'ops_replace') {
+    if (Object.hasOwn(args, 'path') && args.path !== undefined) {
+      const target = checkPath(args.path);
+      if (!target) return { kind: 'deny', rule: 'invalid-arguments' };
+      paths.push(target);
+    } else {
+      paths.push('.');
+    }
+    if (Object.hasOwn(args, 'glob') && args.glob !== undefined) {
+      if (!Array.isArray(args.glob) || args.glob.some(entry => typeof entry !== 'string' || entry.includes('\0'))) {
+        return { kind: 'deny', rule: 'invalid-arguments' };
+      }
+      for (const pattern of args.glob as string[]) {
+        const clean = pattern.replace(/^!/, '');
+        if (!clean || /(?:^|[/\\])\.\.(?:$|[/\\])/.test(clean) || isAbsolute(clean) || /^[A-Za-z]:/.test(clean)) {
+          return { kind: 'ask', rule: 'outside-workspace' };
+        }
+      }
+    }
+  } else {
+    const source = checkPath(args.path);
+    if (!source) return { kind: 'deny', rule: 'invalid-arguments' };
+    paths.push(source);
+    if (name === 'ops_copy' || name === 'ops_move') {
+      const dest = checkPath(args.to);
+      if (!dest) return { kind: 'deny', rule: 'invalid-arguments' };
+      paths.push(dest);
+    }
+  }
+  if (policy.mode === 'read-only') return { kind: 'deny', rule: 'read-only-write' };
+  if (name === 'ops_remove') return { kind: 'ask', rule: 'destructive' };
+  if (!dir.ok || paths.some(p => !isPathUnderSync(p, policy.workspaceRoot, baseDir))) return { kind: 'ask', rule: 'outside-workspace' };
+  return { kind: 'allow' };
+}
+
+function assessOpsBatch(args: Record<string, unknown>, policy: Policy): Assessment {
+  if (typeof args.action !== 'string' || !['plan', 'run', 'resume'].includes(args.action)) return { kind: 'deny', rule: 'invalid-arguments' };
+  const action = args.action;
+  let effectiveRoot = policy.workspaceRoot;
+  let rootOutside = false;
+  if (Object.hasOwn(args, 'root') && args.root !== undefined) {
+    if (!isValidTextArg(args.root)) return { kind: 'deny', rule: 'invalid-arguments' };
+    effectiveRoot = args.root.trim();
+    if (!isPathUnderSync(effectiveRoot, policy.workspaceRoot)) rootOutside = true;
+  }
+  if (Object.hasOwn(args, 'operationsRef') && args.operationsRef !== undefined && !isValidTextArg(args.operationsRef)) {
+    return { kind: 'deny', rule: 'invalid-arguments' };
+  }
+  if (Object.hasOwn(args, 'protect') && args.protect !== undefined) {
+    if (!Array.isArray(args.protect) || args.protect.some(item => typeof item !== 'string' || item.includes('\0'))) {
+      return { kind: 'deny', rule: 'invalid-arguments' };
+    }
+  }
+  let hasRemove = false;
+  let pathOutside = false;
+  if (Object.hasOwn(args, 'operations') && args.operations !== undefined) {
+    if (!Array.isArray(args.operations)) return { kind: 'deny', rule: 'invalid-arguments' };
+    for (const item of args.operations) {
+      if (!isRecord(item) || typeof item.op !== 'string' || !['copy', 'move', 'remove'].includes(item.op)) {
+        return { kind: 'deny', rule: 'invalid-arguments' };
+      }
+      if (!isValidTextArg(item.path)) return { kind: 'deny', rule: 'invalid-arguments' };
+      if (Object.hasOwn(item, 'to') && item.to !== undefined && !isValidTextArg(item.to)) {
+        return { kind: 'deny', rule: 'invalid-arguments' };
+      }
+      if (item.op === 'remove') hasRemove = true;
+      if (!rootOutside) {
+        if (!isPathUnderSync(item.path.trim(), policy.workspaceRoot, effectiveRoot)) pathOutside = true;
+        if (typeof item.to === 'string' && !isPathUnderSync(item.to.trim(), policy.workspaceRoot, effectiveRoot)) pathOutside = true;
+      }
+    }
+  }
+  if (policy.mode === 'read-only') {
+    if (action !== 'plan') return { kind: 'deny', rule: 'read-only-write' };
+    return rootOutside || pathOutside ? { kind: 'ask', rule: 'outside-workspace' } : { kind: 'ask', rule: 'read-only-unknown' };
+  }
+  if (rootOutside || pathOutside) return { kind: 'ask', rule: 'outside-workspace' };
+  if (action !== 'plan') {
+    if (hasRemove) return { kind: 'ask', rule: 'destructive' };
+    if (action === 'resume' || (Object.hasOwn(args, 'operationsRef') && args.operationsRef !== undefined)) {
+      return { kind: 'ask', rule: 'opaque-execution' };
+    }
+  }
+  return { kind: 'allow' };
+}
+
+function assessRunCode(args: Record<string, unknown>, policy: Policy): Assessment {
+  const rawCode = Object.hasOwn(args, 'code') ? args.code : Object.hasOwn(args, 'script') ? args.script : undefined;
+  if (typeof rawCode !== 'string' || !rawCode.trim() || rawCode.length > 131072 || rawCode.includes('\0')) {
+    return { kind: 'deny', rule: 'invalid-arguments' };
+  }
+  const dir = resolveWorkdir(args, policy.workspaceRoot);
+  if (!dir.ok && dir.rule === 'invalid-arguments') return { kind: 'deny', rule: 'invalid-arguments' };
+  const lowered = rawCode.toLowerCase();
+  if (/\brunas(?:\.exe)?\b|\bshellexecute\b|elevation:administrator/.test(lowered)
+    || /\bschtasks(?:\.exe)?\b[\s\S]*?\/(?:create|change)\b|\bsc(?:\.exe)?\s+(?:create|config)\b/.test(lowered)) {
+    return { kind: 'deny', rule: 'elevation' };
+  }
+  const destructive = /\b(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync|rmtree)\s*\(|\btools\s*\.\s*(?:ops_remove|delete|remove_file|delete_file)\b/.test(rawCode);
+  const directMutate = destructive
+    || /\b(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|mkdir|mkdirSync|rename|renameSync|copyFile|copyFileSync|chmod|chmodSync|chown|chownSync|truncate|truncateSync)\s*\(/.test(rawCode)
+    || /\btools\s*\.\s*(?:pwsh|bash|ops_bash|exec_command|terminal_open|terminal_send|write|edit|apply_patch|multi_edit|str_replace_editor|ops_write_file|ops_edit_file|ops_replace|ops_copy|ops_move|ops_batch)\b/.test(rawCode);
+  const directHostAccess = /\b(?:import\s*\(|require\s*\(|eval\s*\(|Function\s*\(|process\s*(?:\.|\[)|constructor\s*\.\s*constructor|Deno\.(?:write|remove|run|Command)|Bun\.write|from\s+(?:os|sys|subprocess|shutil|pathlib)\s+import|import\s+(?:os|sys|subprocess|shutil|pathlib)\b|(?:node:)?(?:fs(?:\/promises)?|child_process|worker_threads|vm|inspector)\b|(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|fork)\s*\()/.test(rawCode);
+  if (policy.mode === 'read-only') {
+    if (directMutate) return { kind: 'deny', rule: 'read-only-write' };
+    return !dir.ok ? { kind: 'ask', rule: 'outside-workspace' } : { kind: 'ask', rule: 'read-only-unknown' };
+  }
+  if (!dir.ok) return { kind: 'ask', rule: 'outside-workspace' };
+  if (destructive) return { kind: 'ask', rule: 'destructive' };
+  if (directHostAccess) return { kind: 'ask', rule: 'opaque-execution' };
+  return { kind: 'allow' };
 }
 
 /** Conservative recognition, not a shell parser or an OS sandbox. Inspect nested literal payloads too. */
@@ -178,13 +359,15 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
     || /\b(?:start-process|saps)\b[\s\S]*?-(?:verb|v)\s+['"]?runas\b/.test(text)
     || /\bschtasks(?:\.exe)?\b[\s\S]*?\/(?:create|change)\b/.test(text)
     || /\bsc(?:\.exe)?\s+(?:create|config)\b/.test(text)) return { kind: 'deny', rule: 'elevation' };
-  const commandWord = (words: string) => new RegExp(`(?:^|[\\s;&|({"'])${words}(?=$|[\\s;|&)}"'])`, 'i').test(text);
+  const commandWordIn = (target: string, words: string) => new RegExp(`(?:^|[\\s;&|({"'])${words}(?=$|[\\s;|&)}"'])`, 'i').test(target);
+  const commandWord = (words: string) => commandWordIn(text, words);
   const destructive = commandWord('(?:remove-item|ri|rm|del|erase|rmdir|rd|unlink|clear-content|format(?:\\.com)?|diskpart|bcdedit|takeown|icacls)')
     || /\breg(?:\.exe)?\s+(?:add|delete|import|restore)\b|\bgit\s+(?:reset\b[^\r\n]*--hard|clean\b|push\b[^\r\n]*--force)/.test(text);
   const modifies = destructive || commandWord('(?:set-content|add-content|out-file|new-item|ni|copy-item|cp|copy|move-item|mv|move|rename-item|ren|mkdir|md|touch|tee|set-item|set-itemproperty|remove-itemproperty|new-itemproperty|clear-itemproperty|set-acl|set-service|stop-service|restart-service|set-ciminstance|invoke-cimmethod)')
     || /(?:^|[^<])>{1,2}|\bgit\s+(?:add|commit|checkout|switch|restore|merge|rebase|cherry-pick|revert|stash|pull|fetch|config)\b|\bgit\s+[\s\S]*--output(?:=|\s)/.test(text);
   const literalRead = !modifies && !/[`$;&<>(){}\r\n]/.test(command) && !/--(?:pre|ext-diff|textconv|output)\b/i.test(command)
-    && command.split('|').every(part => /^(?:get-content|get-item|get-childitem|get-location|get-filehash|get-process|test-path|select-string|select-object|measure-object|compare-object|write-output|write-host|echo|pwd|ls|cat|head|tail|stat|wc|rg|grep)(?:\s|$)/i.test(part.trim())
+    && splitUnquotedPipes(command).every(part =>
+      /^(?:get-content|get-item|get-childitem|get-location|get-filehash|get-process|test-path|select-string|select-object|measure-object|compare-object|write-output|write-host|echo|pwd|ls|cat|head|tail|stat|wc|rg|grep)(?:\s|$)/i.test(part.trim())
       || /^git\s+(?:status|diff|log|show|ls-files|ls-tree|rev-parse)(?:\s|$)/i.test(part.trim()));
   // Native read tools already allow reads outside the workspace. File modes
   // constrain modifications, not every path appearing in a read command.
@@ -205,15 +388,18 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
   if (outside) return { kind: 'ask', rule: 'outside-workspace' };
   // Ordinary workspace build/test/script commands use the standing native
   // workspace sandbox. They are not an escalation merely because they run code.
+  const unquoted = stripSafeQuotesForCommandScan(text);
+  const nestedShell = '(?:invoke-expression|iex|start-process|saps|cmd(?:\\.exe)?|powershell(?:\\.exe)?|pwsh(?:\\.exe)?|bash|sh|wscript(?:\\.exe)?|cscript(?:\\.exe)?|mshta(?:\\.exe)?)';
   const development = /^(?:npm(?:\.cmd)?|pnpm(?:\.cmd)?|npx(?:\.cmd)?|yarn(?:\.cmd)?|bun|node(?:\.exe)?|python(?:3|\.exe)?|py|pytest|tsc|vitest|jest|go|cargo|dotnet|cmake|make|git)(?:\s|$)/i.test(command.trim());
-  if (development && !/[;&|`\r\n]/.test(command)
-    && !/\brunas\b|shellexecute|\b(?:invoke-expression|iex|start-process|saps)\b|-(?:encodedcommand|enc|ec)\b/i.test(text)) return { kind: 'allow' };
+  if (development && !/[;&|`\r\n]/.test(command) && !/\$\(|[<>]\(/.test(command) && !hasExpandableDollar(command)
+    && !commandWordIn(unquoted, nestedShell)
+    && !/-(?:encodedcommand|enc|ec)\b|frombase64string|shell\.application/.test(unquoted)) return { kind: 'allow' };
   if (commandWord('(?:invoke-expression|iex|start-process|saps|cmd(?:\\.exe)?|powershell(?:\\.exe)?|pwsh(?:\\.exe)?|bash|sh|wscript(?:\\.exe)?|cscript(?:\\.exe)?|mshta(?:\\.exe)?|python(?:3|\\.exe)?|node(?:\\.exe)?)')
     || /-(?:encodedcommand|enc|ec|e)\b|frombase64string|shell\.application|(?:^|[\s;])(?:&|\.)\s|\$\(|\.(?:ps1|bat|cmd|vbs|js|py)(?:\s|['"]|$)/.test(text)) return { kind: 'ask', rule: 'opaque-execution' };
   // Native executables and shell constructs outside the small understood set
   // require review, including absolute executable paths and custom scripts.
   const ordinary = /^(?:get-content|get-item|get-childitem|get-location|get-filehash|get-process|test-path|select-string|select-object|measure-object|compare-object|write-output|write-host|echo|pwd|set-content|add-content|out-file|new-item|copy-item|move-item|rename-item)(?:\s|$)/i.test(command.trim());
-  return ordinary && !/[;&|`(){}\r\n]/.test(command) && !/\.(?:ps1|bat|cmd|exe)\b/i.test(command)
+  return ordinary && !/[;&|`(){}\r\n]/.test(command) && !hasExpandableDollar(command) && !/\.(?:ps1|bat|cmd|exe)\b/i.test(command)
     ? { kind: 'allow' } : { kind: 'ask', rule: 'opaque-execution' };
 }
 
@@ -303,9 +489,11 @@ export class OperationSafety {
         if (cmdResult.kind === 'deny') return cmdResult;
         if (cmdResult.kind === 'ask') return cmdResult;
       }
-      if (Object.hasOwn(args, 'shell') && args.shell !== undefined) {
-        if (typeof args.shell !== 'string' || !args.shell.trim()) return { kind: 'deny', rule: 'invalid-arguments' };
-        if (!/^(?:pwsh|powershell|bash|sh|cmd)(?:\.exe)?$/i.test(args.shell.trim())) return { kind: 'ask', rule: 'opaque-execution' };
+      for (const key of ['type', 'shell'] as const) {
+        if (Object.hasOwn(args, key) && args[key] !== undefined) {
+          if (typeof args[key] !== 'string' || !args[key].trim()) return { kind: 'deny', rule: 'invalid-arguments' };
+          if (!/^(?:pwsh|powershell|bash|sh|cmd)(?:\.exe)?$/i.test(args[key].trim())) return { kind: 'ask', rule: 'opaque-execution' };
+        }
       }
       if (policy.mode === 'read-only') return { kind: 'ask', rule: 'read-only-unknown' };
       if (!dir.ok) return { kind: 'ask', rule: 'outside-workspace' };
@@ -339,11 +527,19 @@ export class OperationSafety {
       if (!['create', 'str_replace', 'insert'].includes(subcommand)) return { kind: 'ask', rule: 'opaque-execution' };
       return { kind: 'allow' };
     }
+    if ((OPS_WRITE_TOOLS as readonly string[]).includes(exec.name) || exec.name === 'ops_remove') {
+      return assessOpsFile(exec.name, args, policy);
+    }
+    if ((BATCH_TOOLS as readonly string[]).includes(exec.name)) {
+      return assessOpsBatch(args, policy);
+    }
+    if ((CODE_TOOLS as readonly string[]).includes(exec.name)) {
+      return assessRunCode(args, policy);
+    }
     const extracted = extractWritePaths(exec.name, args);
     if (!extracted.ok || extracted.paths.length === 0) return { kind: 'deny', rule: 'invalid-arguments' };
     if (policy.mode === 'read-only') return { kind: 'deny', rule: 'read-only-write' };
-    if ((DELETE_TOOLS as readonly string[]).includes(exec.name)) return { kind: 'ask', rule: 'destructive' };
-    if (exec.name === 'apply_patch' && Object.values(args).some(value => typeof value === 'string' && /^[^\S\r\n]*\*\*\* (?:Delete File|Move to):/m.test(value))) return { kind: 'ask', rule: 'destructive' };
+    if ((DELETE_TOOLS as readonly string[]).includes(exec.name) || extracted.destructive) return { kind: 'ask', rule: 'destructive' };
     if (extracted.paths.some(p => !isPathUnderSync(p, policy.workspaceRoot))) return { kind: 'ask', rule: 'outside-workspace' };
     return { kind: 'allow' };
   }
@@ -397,10 +593,12 @@ export class OperationSafety {
       const signal = AbortSignal.any([exec.signal, this.shutdown.signal]);
       // Full, frozen input is shown only in the host's approval UI/log, not in
       // plugin diagnostics. No model-provided description substitutes for it.
-      const details = JSON.stringify({ tool: exec.name, mode: policy.mode, workspace: policy.workspaceRoot,
+      const rawDetails = JSON.stringify({ tool: exec.name, mode: policy.mode, workspace: policy.workspaceRoot,
         workdir: isRecord(exec.arguments) ? exec.arguments.workdir ?? exec.arguments.cwd ?? policy.workspaceRoot : policy.workspaceRoot,
         arguments: exec.arguments }, null, 2);
-      if (details.length > 65536) return this.deny(exec, 'invalid-arguments', policy);
+      const details = rawDetails.length <= 65536
+        ? rawDetails
+        : `${rawDetails.slice(0, 65000)}\n... [预览已截断，总长 ${rawDetails.length} 字符；审批仅对完整参数哈希生效]`;
       this.record(exec, 'approval-requested', assessment.rule, policy);
       const outcome = await approval.request({ agent: exec.agent, callId: exec.callId, toolName: exec.name,
         reason: `Runtime Guard 操作防护：${reasons[assessment.rule]}\n以下为本次调用的完整参数（仅允许一次）：\n${details}`, signal });

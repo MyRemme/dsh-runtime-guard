@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { defaults, resolveSettings, Config } from '../src/config.js';
 import { StreamMonitor } from '../src/monitor.js';
-import { periodicSuffix, RepeatDetector } from '../src/detection.js';
+import { periodicSuffix, phraseRepetition, RepeatDetector, StepLoopTracker } from '../src/detection.js';
 import { FenceFilter } from '../src/fences.js';
 import { chunks, repeated } from './helpers.js';
 
@@ -287,6 +287,31 @@ describe('repeat evidence', () => {
     const events: unknown[] = [], monitor = new StreamMonitor(defaults, e => events.push(e));
     chunks('。'.repeat(10000)).forEach(c => monitor.push(c));
     expect(events).toEqual([]);
+  });
+  it('detects comma/colon loops and non-periodic arrow/semicolon reasoning loops without false positives', () => {
+    const commaEvents: { confirmed: boolean; method?: string }[] = [];
+    const commaMonitor = new StreamMonitor(defaults, e => commaEvents.push(e));
+    const commaLoop = Array.from({ length: 160 }, (_, i) => `Wait, let me verify this again, ${i % 10 === 0 ? `note ${i}: check,` : ''}`).join('');
+    chunks(commaLoop, 73, 'reasoning').forEach(c => commaMonitor.push(c));
+    expect(commaEvents.some(e => e.confirmed && e.method === 'phrase')).toBe(true);
+
+    const arrowEvents: { confirmed: boolean; method?: string }[] = [];
+    const arrowMonitor = new StreamMonitor(defaults, e => arrowEvents.push(e));
+    const arrowLoop = Array.from({ length: 140 }, (_, i) => `check -> retry; ${i % 8 === 0 ? `(step ${i}) ` : ''}`).join('');
+    chunks(arrowLoop, 73, 'reasoning').forEach(c => arrowMonitor.push(c));
+    expect(arrowEvents.some(e => e.confirmed)).toBe(true);
+
+    const safe = Array.from({ length: 40 }, (_, i) => `Total 1,${100 + i} at 12:${10 + (i % 40)}, branch ${i},`).join(' ');
+    expect(phraseRepetition(safe, defaults.minRepeats)).toBeUndefined();
+  });
+  it('tracks identical short reasoning across consecutive steps and clears on distinct work', () => {
+    const tracker = new StepLoopTracker();
+    const shortLoop = 'Wait, let me double check the repository layout and config imports before making any changes.';
+    expect(tracker.observe(shortLoop)).toBeUndefined();
+    expect(tracker.observe(shortLoop)).toMatchObject({ confirmed: false, score: 76 });
+    expect(tracker.observe(shortLoop)).toMatchObject({ confirmed: true, score: 92 });
+    expect(tracker.observe('Now inspecting a completely different module src/updater.ts and verifying archive SHA-256 handling.')).toBeUndefined();
+    expect(tracker.observe(shortLoop)).toBeUndefined();
   });
 });
 describe('configuration', () => {

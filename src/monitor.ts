@@ -26,6 +26,8 @@ export class StreamMonitor {
   private lastOutputAt: string | null = null;
   private lastCheckAt: string | null = null;
   private evidence: (RepeatEvidence & { contentType: 'reasoning' | 'text' }) | null = null;
+  private reasoningTail = '';
+  private reasoningFlushed = false;
   snapshot() {
     return { reasoningChars: this.reasoningChars, textChars: this.textChars, analyzedChars: this.analyzedChars, checks: this.checks,
       lastOutputAt: this.lastOutputAt, lastCheckAt: this.lastCheckAt,
@@ -34,8 +36,19 @@ export class StreamMonitor {
       risk: this.reported.size ? 'confirmed' as const : this.evidence && this.evidence.score >= 70 ? 'suspected' as const : this.incomplete ? 'incomplete' as const : this.checks ? 'clear' as const : 'collecting' as const,
       evidence: this.evidence ? { ...this.evidence } : null };
   }
-  invalidate(): void { this.incomplete = true; this.monitorError = true; }
-  constructor(private readonly config: Settings, private readonly report: (e: RepeatEvidence & { contentType: 'reasoning' | 'text' }) => void) {}
+  invalidate(): void { this.incomplete = true; this.monitorError = true; this.reasoningTail = ''; }
+  constructor(
+    private readonly config: Settings,
+    private readonly report: (e: RepeatEvidence & { contentType: 'reasoning' | 'text' }) => void,
+    private readonly onReasoningComplete?: (reasoningText: string) => void,
+  ) {}
+  private flushReasoning(): void {
+    const sample = this.reasoningTail;
+    this.reasoningTail = '';
+    if (this.reasoningFlushed || !sample) return;
+    this.reasoningFlushed = true;
+    if (!this.reported.has('reasoning') && !this.monitorError) this.onReasoningComplete?.(sample);
+  }
   push(chunk: Chunk): void {
     if (Number.isSafeInteger(chunk.index) && this.closed.has(chunk.index!)) return;
     // Counters advance after confirmation; the other content type still gets scanned.
@@ -44,7 +57,7 @@ export class StreamMonitor {
       if (this.closed.size < 65536) this.closed.add(chunk.index!); else this.incomplete = true;
       this.outputBlocks.delete(chunk.index!);
     }
-    if (chunk.type === 'finish') { this.blocks.clear(); return; }
+    if (chunk.type === 'finish') { this.flushReasoning(); this.blocks.clear(); return; }
     if (this.monitorError || this.fenceLimit) return;
     if (!['block-start', 'reasoning-delta', 'text-delta', 'block-end'].includes(chunk.type) || !Number.isSafeInteger(chunk.index)) return;
     const index = chunk.index!;
@@ -62,14 +75,22 @@ export class StreamMonitor {
     if (block.closed) return;
     if (chunk.type === 'block-end') {
       // Adapters may emit only block-end; don't count text twice after deltas.
-      if (!block.seen && (chunk.block?.type === 'text' || chunk.block?.type === 'reasoning')) this.feed(block, chunk.block.text ?? '');
+      if (!block.seen && (chunk.block?.type === 'text' || chunk.block?.type === 'reasoning')) {
+        const body = chunk.block.text ?? '';
+        if (block.type === 'reasoning' && this.onReasoningComplete && body) this.reasoningTail = (this.reasoningTail + body).slice(-4096);
+        this.feed(block, body);
+      }
       if (!this.reported.has(block.type)) block.filter.finish(text => this.inspect(block!, text));
+      if (block.type === 'reasoning') this.flushReasoning();
       block.closed = true;
       this.blocks.delete(index);
       return;
     }
     if (typeof chunk.text !== 'string' || (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta')) return;
     if (chunk.text.length > 0) block.seen = true;
+    if (block.type === 'reasoning' && this.onReasoningComplete && chunk.text.length > 0) {
+      this.reasoningTail = (this.reasoningTail + chunk.text).slice(-4096);
+    }
     this.feed(block, chunk.text);
   }
   private countOutput(chunk: Chunk): void {

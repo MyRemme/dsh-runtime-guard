@@ -69,8 +69,9 @@ export function manifestCandidate(value: unknown, current: string): Candidate | 
 /** Inspect every entry before pnpm sees it; no links, traversal or install scripts. */
 export async function validateArchive(file: string, version: string, hostVersion: string): Promise<void> {
   const names = new Set<string>();
-  let entries = 0, bytes = 0, invalid = false;
+  let entries = 0, bytes = 0, invalid = false, manifestBytes = 0;
   const body: Buffer[] = [];
+  const bundledManifests = new Map<string, Buffer[]>();
   const uncompressed = gunzipSync(await readFile(file), { maxOutputLength: 64 * 1024 * 1024 });
   const parser = list({ strict: true, onReadEntry: entry => {
     bytes += entry.size;
@@ -79,13 +80,38 @@ export async function validateArchive(file: string, version: string, hostVersion
       || !['File', 'Directory'].includes(entry.type)) invalid = true;
     names.add(entry.path);
     if (entry.size > 4 * 1024 * 1024) invalid = true;
-    if (entry.path === 'package/package.json' && entry.size <= 256 * 1024) entry.on('data', part => { body.push(Buffer.from(part)); });
+    if (entry.path === 'package/package.json' && entry.size <= 256 * 1024) {
+      entry.on('data', part => { body.push(Buffer.from(part)); });
+    } else if (/^package\/(?:.+\/)?node_modules\/(?:@[^/]+\/)?[^/]+\/package\.json$/.test(entry.path) && entry.size <= 256 * 1024) {
+      const parts: Buffer[] = [];
+      bundledManifests.set(entry.path, parts);
+      entry.on('data', part => {
+        manifestBytes += part.length;
+        if (manifestBytes <= 4 * 1024 * 1024) parts.push(Buffer.from(part));
+        else invalid = true;
+      });
+    }
   } });
   const done = finished(parser); parser.end(uncompressed); await done;
-  if (invalid || !names.has('package/dist/index.js') || !names.has('package/client/client.js') || !names.has('package/cordis.patch.yml')) return failure('invalid-archive');
-  const pkg = JSON.parse(Buffer.concat(body).toString()) as { name: string; version: string; scripts?: Record<string, unknown>; engines?: { node?: string; dsh?: string }; dependencies?: Record<string, string> };
-  if (pkg.name !== manifest.name || pkg.version !== version) return failure('invalid-archive');
-  if (['preinstall', 'install', 'postinstall', 'prepare'].some(key => pkg.scripts?.[key])) return failure('install-scripts');
+  if (invalid || !names.has('package/dist/index.js') || !names.has('package/client/client.js') || !names.has('package/cordis.patch.yml') || !body.length) return failure('invalid-archive');
+  let pkg: { name: string; version: string; scripts?: Record<string, unknown>; engines?: { node?: string; dsh?: string }; dependencies?: Record<string, string> };
+  try {
+    pkg = JSON.parse(Buffer.concat(body).toString());
+  } catch {
+    return failure('invalid-archive');
+  }
+  if (!pkg || pkg.name !== manifest.name || pkg.version !== version) return failure('invalid-archive');
+  const installKeys = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
+  if (installKeys.some(key => pkg.scripts?.[key])) return failure('install-scripts');
+  for (const parts of bundledManifests.values()) {
+    let depPkg: { scripts?: Record<string, unknown> };
+    try {
+      depPkg = JSON.parse(Buffer.concat(parts).toString());
+    } catch {
+      return failure('invalid-archive');
+    }
+    if (depPkg?.scripts && installKeys.some(key => depPkg.scripts?.[key])) return failure('install-scripts');
+  }
   if (Object.values(pkg.dependencies ?? {}).some(value => !valid(value))) return failure('invalid-dependencies');
   if (!valid(hostVersion) || !pkg.engines?.dsh || !satisfies(hostVersion, pkg.engines.dsh)
     || !pkg.engines.node || !satisfies(process.versions.node, pkg.engines.node)) return failure('incompatible-host');
@@ -215,8 +241,14 @@ export class Updater implements UpdateAPI {
     }
     if (Date.now() < this.apiRetryAt) return failure('github-denied');
     const body = await this.request(`${API}/releases/latest`, 1024 * 1024);
-    const data = JSON.parse(body.toString());
-    return { candidate: releaseCandidate(data, this.state.currentVersion), version: data.tag_name.replace(/^v/, '') };
+    let data: { tag_name?: string };
+    try {
+      data = JSON.parse(body.toString());
+    } catch {
+      return failure('invalid-release');
+    }
+    const candidate = releaseCandidate(data, this.state.currentVersion);
+    return { candidate, version: data.tag_name!.replace(/^v/, '') };
   }
   check(): Promise<UpdateStatus> {
     if (this.work) return this.work;

@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { PROFILE_DIR, readProfileJsonSync, writeProfileFile } from './profile-file.js';
 import { resolveSettings, Config, type Settings } from './config.js';
 import { compatibilityFor, detectHostVersion } from './compatibility.js';
+import { StepLoopTracker, type RepeatEvidence } from './detection.js';
 import { StreamMonitor } from './monitor.js';
 import { ProgressGuard } from './progress.js';
 import { MetricsStore, sessionKey, type DiagnosticEvent } from './metrics.js';
@@ -49,7 +50,7 @@ interface SessionState {
   agent: Agent; turn: number; step: number; signal?: AbortSignal;
   route?: RequestOptions;
   request?: RequestState; activity?: RequestState;
-  frameId?: string; progress: ProgressGuard; ending?: Record<string, unknown>;
+  frameId?: string; progress: ProgressGuard; stepTracker: StepLoopTracker; ending?: Record<string, unknown>;
   enabled: boolean; noticeKeys: Set<string>;
   coverage: 'waiting' | 'other-model' | 'auxiliary' | 'unavailable' | 'checked';
   monitoredRequests: number; confirmed: number; toolWarnings: number; recoverySubmitted: number; cancelRequested: number; lastMonitoredAt: string | null;
@@ -65,9 +66,24 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
   const detected = detectHostVersion(profile?.installAnchor);
   // Only detected metadata unlocks safety; hostVersion is merely a monitor hint.
   const operationSafety = new OperationSafety(ctx, config.operationSafety, detected ?? '', profile?.dir);
-  const compatibility = compatibilityFor(config.hostVersion || detected || '');
-  // Explicit version is an observation hint, never permission to unlock recovery.
-  if (config.hostVersion && detected !== config.hostVersion) { compatibility.intervention = false; compatibility.guard = false; }
+  const compatibility = profile?.installAnchor
+    ? compatibilityFor(detected ?? config.hostVersion ?? '')
+    : compatibilityFor(config.hostVersion || detected || '');
+  // Stale hostVersion in cordis.patch.yml must not downgrade a verified detected runtime;
+  // mismatched/unrecognized hosts without an installAnchor or conflicting packages still lock out guard/auto.
+  if (profile?.installAnchor) {
+    if (!detected) {
+      compatibility.intervention = false; compatibility.guard = false;
+      if (compatibility.reason === 'host-tests-passed' || compatibility.reason === 'automatic-intervention-not-verified') {
+        compatibility.reason = 'host-version-unverified';
+      }
+    }
+  } else if (config.hostVersion && detected !== config.hostVersion) {
+    compatibility.intervention = false; compatibility.guard = false;
+    if (compatibility.reason === 'host-tests-passed' || compatibility.reason === 'automatic-intervention-not-verified') {
+      compatibility.reason = 'host-version-mismatch';
+    }
+  }
   const modeFile = profile?.dir ? join(profile.dir, PROFILE_DIR, 'mode.json') : undefined;
   let configuredMode: Settings['mode'] = config.mode;
   if (profile?.dir) {
@@ -134,7 +150,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
   }, profile?.dir, () => {
     for (const state of states.values()) {
       const eligible = modelScope.matches(state.request?.route ?? state.route ?? {});
-      if (!eligible) { state.coverage = 'other-model'; delete state.request; state.progress.clear(); }
+      if (!eligible) { state.coverage = 'other-model'; delete state.request; state.progress.clear(); state.stepTracker.clear(); }
       else if (state.coverage === 'other-model') state.coverage = 'waiting';
       recovery.setEnabled(state.agent, monitoring && state.enabled && eligible);
     }
@@ -155,7 +171,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     }
     const enabled = !disabledSessions.has(agent.id);
     recovery.setEnabled(agent, enabled && monitoring && selected(agent.model?.current() ?? agent.options ?? {}));
-    state = { agent, turn: 0, step: 0, progress: new ProgressGuard(config.toolRepeatLimit), enabled, noticeKeys: new Set(),
+    state = { agent, turn: 0, step: 0, progress: new ProgressGuard(config.toolRepeatLimit), stepTracker: new StepLoopTracker(), enabled, noticeKeys: new Set(),
       coverage: 'waiting', monitoredRequests: 0, confirmed: 0, toolWarnings: 0, recoverySubmitted: 0, cancelRequested: 0, lastMonitoredAt: null, latestEvent: null, toolResults: 0, lastToolAt: null };
     states.set(agent.id, state);
     return state;
@@ -169,13 +185,13 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
       modelScope.remember(state.route);
       recovery.setEnabled(state.agent, monitoring && state.enabled && selected(state.route));
       if (payload.messages.some(m => m.source?.kind === 'user')) {
-        recovery.resetByUser(payload.agent); state.progress.clear(); state.noticeKeys.clear();
+        recovery.resetByUser(payload.agent); state.progress.clear(); state.stepTracker.clear(); state.noticeKeys.clear();
       }
     }, () => states.get(payload.agent.id));
     return next(); // Preserve downstream decisions, messages and startsRequestSeries verbatim.
   });
   ctx.on('agent/inbox/inserted', ({ agent, message }: { agent: Agent; message: { source?: { kind?: string } } }) => {
-    if (message.source?.kind === 'user') guarded(() => recovery.resetByUser(agent), states.get(agent.id));
+    if (message.source?.kind === 'user') guarded(() => { recovery.resetByUser(agent); states.get(agent.id)?.stepTracker.clear(); }, states.get(agent.id));
   });
 
   ctx.on('llm/stream', (options: RequestOptions, next: () => AsyncIterable<Chunk>) => {
@@ -194,10 +210,11 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     return (async function* () {
       const signal = options.signal!;
       let request: SessionState['request'];
+      let reasoningObserved = false;
       guarded(() => {
         if (!monitoring || !state.enabled || !selected(options) || states.get(state.agent.id) !== state || signal !== state.signal) return;
         const origin = { turn: state.turn, step: state.step }, noticeKeys = new Set<string>();
-        const monitor = new StreamMonitor(config, evidence => {
+        const emitRepeat = (evidence: RepeatEvidence & { contentType: 'reasoning' | 'text' }) => {
           const willIntervene = evidence.confirmed && !evidence.uncertainty && effectiveMode !== 'observe'
             && (effectiveMode !== 'guard' || evidence.contentType === 'reasoning')
             && selected(options) && !signal.aborted && signal === state.signal && origin.turn === state.turn && origin.step === state.step
@@ -213,6 +230,14 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
           }
           if (willIntervene)
             recovery.request(state.agent, signal, effectiveMode === 'guard' ? compatibility.guard : compatibility.intervention, origin);
+        };
+        const monitor = new StreamMonitor(config, emitRepeat, reasoningText => {
+          reasoningObserved = true;
+          const active = !disposed && monitoring && state.enabled && selected(options) && signal === state.signal
+            && state.agent === states.get(state.agent.id)?.agent && origin.turn === state.turn && origin.step === state.step;
+          if (!active) return;
+          const cross = state.stepTracker.observe(reasoningText, Math.max(3, config.confirmations));
+          if (cross) emitRepeat({ ...cross, contentType: 'reasoning' });
         });
         state.noticeKeys.clear();
         state.latestEvent = null;
@@ -236,6 +261,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
       } finally {
         if (ownRequest) {
           finishedRequests++;
+          if (completed && !reasoningObserved && state.agent === states.get(state.agent.id)?.agent) state.stepTracker.clear();
           if (state.request === ownRequest) {
             if (!completed) state.coverage = 'unavailable';
             if (state.frameId === ownRequest.frameId) delete state.frameId;
@@ -288,6 +314,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     const state = states.get(agent.id);
     if (status !== 'idle' || !state || state.agent !== agent) return;
     recovery.settled(agent, state.ending);
+    state.stepTracker.clear();
     delete state.ending;
     delete state.request; delete state.signal; delete state.frameId;
   }, states.get(agent.id)));
@@ -331,7 +358,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     setMonitoring: enabled => guarded(() => {
       monitoring = enabled;
       for (const state of states.values()) {
-        if (!enabled) state.progress.clear();
+        if (!enabled) { state.progress.clear(); state.stepTracker.clear(); }
         if (!enabled && state.request) { state.coverage = 'unavailable'; delete state.request; }
         recovery.setEnabled(state.agent, enabled && state.enabled && selected(state.request?.route ?? state.route ?? {}));
       }
@@ -371,7 +398,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
       const agent = states.get(sessionId)?.agent ?? ctx.agents?.get(sessionId);
       if (!agent) return;
       const state = stateFor(agent); state.enabled = enabled;
-      if (!enabled) state.progress.clear();
+      if (!enabled) { state.progress.clear(); state.stepTracker.clear(); }
       if (!enabled && state.request) { state.coverage = 'unavailable'; delete state.request; }
       recovery.setEnabled(agent, enabled && monitoring && selected(state.request?.route ?? state.route ?? agent.model?.current() ?? agent.options ?? {}));
     }),

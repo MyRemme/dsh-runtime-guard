@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OperationSafety, assessCommand } from '../src/operation-safety.js';
+import { OperationSafety, assessCommand, isPathUnderSync } from '../src/operation-safety.js';
 import { apply, type RuntimeGuardAPI } from '../src/index.js';
 import type { PreToolDecision, ToolExecution } from '../src/types.js';
 import { FakeHost, makeAgent } from './helpers.js';
@@ -312,4 +312,56 @@ it('detects symlink/junction workspace escapes cleanly', async () => {
   expect(f.requests).toHaveLength(1);
   expect(f.safety.status().events[0]?.rule).toBe('outside-workspace');
   expect((await f.run(f.execution('', 'write', { path: join(workspace, 'inside-dir', 'ok.txt'), content: 'x' }))).kind).toBe('executed');
+});
+it('blocks shell redirections without whitespace, variable writes, command substitutions and ADS/drive-relative paths', async () => {
+  expect(isPathUnderSync('..foo.txt', 'D:\\project')).toBe(true);
+  expect(isPathUnderSync('C:escape.txt', 'D:\\project')).toBe(false);
+  expect(isPathUnderSync('notes.txt:Zone.Identifier', 'D:\\project')).toBe(false);
+  expect(assessCommand('echo secret>C:\\outside\\pwned.txt', 'workspace-write', 'D:\\project', 'D:\\project')).toEqual({ kind: 'ask', rule: 'outside-workspace' });
+  expect(assessCommand('Set-Content $outsidePath -Value x', 'workspace-write', 'D:\\project', 'D:\\project')).toEqual({ kind: 'ask', rule: 'outside-workspace' });
+  expect(assessCommand("Set-Content notes.txt -Value '$100'", 'workspace-write', 'D:\\project', 'D:\\project')).toEqual({ kind: 'allow' });
+  expect(assessCommand('node a.js $(powershell -nop -c "evil")', 'workspace-write', 'D:\\project', 'D:\\project')).toEqual({ kind: 'ask', rule: 'opaque-execution' });
+  expect(assessCommand('rg "a|b" src/', 'workspace-write', 'D:\\project', 'D:\\project')).toEqual({ kind: 'allow' });
+  expect(assessCommand('git commit -m "fix bash completion"', 'workspace-write', 'D:\\project', 'D:\\project')).toEqual({ kind: 'allow' });
+  expect(assessCommand('npm run test:host', 'workspace-write', 'D:\\project', 'D:\\project')).toEqual({ kind: 'allow' });
+  expect(assessCommand('Set-Content notes.txt:Zone.Identifier -Value hi', 'workspace-write', 'D:\\project', 'D:\\project')).toEqual({ kind: 'ask', rule: 'outside-workspace' });
+
+  const f = fixture();
+  expect((await f.run(f.execution('', 'terminal_open', { type: 'python', cwd: 'D:\\project' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('opaque-execution');
+  expect((await f.run(f.execution('', 'apply_patch', { patch: '--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('destructive');
+  expect((await f.run(f.execution('', 'apply_patch', { patch: 'diff --git a/a.txt b/out.txt\nrename from a.txt\nrename to C:\\outside\\out.txt' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('outside-workspace');
+});
+it('guards dsh-ops file tools, ops_batch, run_code and large outside-workspace approval previews', async () => {
+  const f = fixture();
+  expect((await f.run(f.execution('', 'ops_write_file', { path: 'src/a.ts', content: 'ok', expectedRevision: '0'.repeat(64) }))).kind).toBe('executed');
+  expect((await f.run(f.execution('', 'ops_replace', { pattern: 'a', replacement: 'b' }))).kind).toBe('executed');
+  expect((await f.run(f.execution('', 'ops_copy', { path: 'src/a.ts', to: 'C:\\outside\\a.ts', expectedRevision: '0'.repeat(64) }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('outside-workspace');
+  expect((await f.run(f.execution('', 'ops_remove', { path: 'src/a.ts', expectedRevision: '0'.repeat(64) }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('destructive');
+  expect((await f.run(f.execution('', 'ops_batch', { action: 'plan', operations: [{ op: 'copy', path: 'a.txt', to: 'b.txt' }] }))).kind).toBe('executed');
+  expect((await f.run(f.execution('', 'ops_batch', { action: 'run', operations: [{ op: 'remove', path: 'a.txt' }] }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('destructive');
+  expect((await f.run(f.execution('', 'ops_batch', { action: 'run', operationsRef: 'ref://plan-1' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('opaque-execution');
+  expect((await f.run(f.execution('', 'run_code', { code: 'return await tools.read({ path: "src/a.ts" });', description: 'read file' }))).kind).toBe('executed');
+  expect((await f.run(f.execution('', 'run_code', { code: 'const fs = await import("node:fs"); fs.writeFileSync("x", "y");', description: 'bypass' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('opaque-execution');
+  expect((await f.run(f.execution('', 'run_code', { code: 'Start-Process cmd -Verb RunAs', description: 'elevate' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('elevation');
+
+  f.setMode('read-only');
+  expect((await f.run(f.execution('', 'ops_write_file', { path: 'src/a.ts', content: 'ok', expectedRevision: '0'.repeat(64), dryRun: true }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('read-only-write');
+  expect((await f.run(f.execution('', 'run_code', { code: 'await tools.read({ path: "a.ts" });', description: 'read' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('read-only-unknown');
+
+  f.setMode('workspace-write');
+  f.setOutcome('allowed-once');
+  const huge = 'x'.repeat(70000);
+  expect((await f.run(f.execution('', 'write', { path: 'C:\\outside\\big.txt', content: huge }))).kind).toBe('executed');
+  expect(f.requests.at(-1)?.reason).toContain('预览已截断');
 });

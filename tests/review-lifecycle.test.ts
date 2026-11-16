@@ -65,3 +65,18 @@ it.each(['observe', 'assist', 'guard'] as const)('records only eligible confirme
     expect(events.find(event => event.confirmed)?.action).toBe(mode === 'assist' || mode === 'guard' && type === 'reasoning' ? 'awaiting-recovery-decision' : 'observe-only');
   }
 });
+it('triggers guard cancel on the third consecutive short identical reasoning step in one turn', async () => {
+  const { host, api } = setup('guard');
+  const cancel = vi.fn(), agent = { ...makeAgent('cross-step'), cancel, followup: vi.fn() };
+  const shortReasoning = 'Let me check all configuration imports carefully and confirm every module boundary before proceeding.';
+  for (let step = 1; step <= 3; step++) {
+    await stream(host, agent, [
+      { type: 'block-start', index: 0, blockType: 'reasoning' },
+      { type: 'reasoning-delta', index: 0, text: shortReasoning },
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: shortReasoning } },
+      { type: 'finish', reason: { kind: step < 3 ? 'tool-calls' : 'stop' } },
+    ], true, {}, step === 1 ? 'user' : 'assistant');
+  }
+  expect(cancel).toHaveBeenCalledTimes(1);
+  expect(api.sessionStatus(agent.id).confirmed).toBe(1);
+});

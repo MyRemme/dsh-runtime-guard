@@ -30,7 +30,16 @@ it('identifies the actual host from its launcher anchor after pnpm relocates the
     const getConflicting = conflicting.get.bind(conflicting);
     conflicting.get = (name: string, strict = true) => name === 'profileContext' ? strict ? undefined : { installAnchor: anchor } : getConflicting(name);
     apply(conflicting, { hostVersion: '0.2.1-rc.2', mode: 'guard' });
-    expect(conflicting.status()).toMatchObject({ mode: 'observe', compatibility: { guard: false } });
+    expect(conflicting.status()).toMatchObject({ mode: 'observe', compatibility: { guard: false, reason: 'host-version-unverified' } });
+    // Stale hostVersion hint in cordis.patch.yml must not downgrade a verified upgraded host detected via installAnchor.
+    for (const name of ['dsh-agent', 'dsh-llm', 'dsh-tools']) {
+      writeFileSync(join(directory, 'node_modules/@deepseek-ai', name, 'package.json'), JSON.stringify({ version: '0.2.2-rc.1' }));
+    }
+    const upgraded = new FakeHost(); active.push(upgraded);
+    const getUpgraded = upgraded.get.bind(upgraded);
+    upgraded.get = (name: string, strict = true) => name === 'profileContext' ? strict ? undefined : { installAnchor: anchor } : getUpgraded(name);
+    apply(upgraded, { hostVersion: '0.2.1-rc.2', mode: 'guard' });
+    expect(upgraded.status()).toMatchObject({ mode: 'guard', compatibility: { version: '0.2.2-rc.1', guard: true } });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 afterEach(async () => { for (const host of active.splice(0)) await host.close(); });

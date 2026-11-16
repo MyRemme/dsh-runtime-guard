@@ -4,10 +4,9 @@ export interface RepeatEvidence { method?: 'periodic' | 'phrase'; uncertainty?: 
 
 /** Repeated short units can alternate with changing remarks, defeating exact periods. */
 export function phraseRepetition(text: string, minRepeats: number, maxUnitLength = 24) {
-  // Keep paths, file extensions and versions intact. Preserve offsets for the
-  // distribution check by replacing separators with one character each.
-  const normalized = text.replace(/\.(?=\s|$)|(?<=\s)\/(?=\s)/gu, '\n');
-  const units = [...normalized.matchAll(/[^。！？!?;；\n\r()（）]+/gu)].map(match => ({
+  // Keep decimals/thousands (1,000), paths, extensions, versions and timestamps (12:30) intact.
+  const normalized = text.replace(/\.(?=\s|$)|(?<=\s)\/(?=\s)|(?<![0-9]),|,(?![0-9])|:(?=\s|$)/gu, '\n');
+  const units = [...normalized.matchAll(/[^。！？!?;；，、：\n\r()（）]+/gu)].map(match => ({
     value: match[0].trim().toLowerCase(), start: match.index!,
   })).filter(unit => unit.value.length > 0);
   const counts = new Map<string, number>();
@@ -76,6 +75,70 @@ export function grams(text: string): Set<string> {
 export function codeLike(text: string): boolean {
   return /^ {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)\r?$/m.test(text) || ((text.match(/[{};=<>]/g)?.length ?? 0) / Math.max(text.length, 1) > 0.08);
 }
+function canRunReasoningPhrase(tail: string, minPeriod: number, maxPeriod: number, minRepeats: number): boolean {
+  if (!codeLike(tail)) return true;
+  if (/^ {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)\r?$/m.test(tail) || /[{}]/.test(tail)) return false;
+  return periodicSuffix(tail, minPeriod, maxPeriod, minRepeats).coverage < 0.85;
+}
+function fnv1aHash(text: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+/** Detects identical/near-identical short reasoning blocks repeated across consecutive steps in one turn. */
+export class StepLoopTracker {
+  private lastGrams: Set<number> | null = null;
+  private lastLength = 0;
+  private streak = 0;
+  clear(): void {
+    this.lastGrams = null;
+    this.lastLength = 0;
+    this.streak = 0;
+  }
+  observe(reasoningText: string, minConsecutiveSteps = 3): RepeatEvidence | undefined {
+    const normalized = reasoningText.replace(/\s+/gu, ' ').trim().toLowerCase();
+    const compactLength = normalized.replace(/\s/gu, '').length;
+    if (compactLength < 60 || codeLike(reasoningText)) {
+      this.clear();
+      return undefined;
+    }
+    const slice = normalized.slice(-2048);
+    const nextGrams = new Set<number>();
+    for (let i = 0; i + 4 <= slice.length; i++) nextGrams.add(fnv1aHash(slice.slice(i, i + 4)));
+    if (nextGrams.size < 30) {
+      this.clear();
+      return undefined;
+    }
+    if (!this.lastGrams) {
+      this.lastGrams = nextGrams;
+      this.lastLength = slice.length;
+      this.streak = 1;
+      return undefined;
+    }
+    let intersection = 0;
+    for (const hash of nextGrams) if (this.lastGrams.has(hash)) intersection++;
+    const union = this.lastGrams.size + nextGrams.size - intersection;
+    const similarity = union > 0 ? intersection / union : 0;
+    const lengthRatio = Math.min(this.lastLength, slice.length) / Math.max(this.lastLength, slice.length, 1);
+    this.lastGrams = nextGrams;
+    this.lastLength = slice.length;
+    if (similarity >= 0.88 && lengthRatio >= 0.85) {
+      this.streak++;
+    } else {
+      this.streak = 1;
+      return undefined;
+    }
+    const confirmed = this.streak >= minConsecutiveSteps;
+    if (!confirmed && this.streak < 2) return undefined;
+    return {
+      method: 'phrase', period: 0, repeats: this.streak, coverage: similarity,
+      novelty: 1 - similarity, score: confirmed ? 92 : 76, confirmed, chars: compactLength,
+    };
+  }
+}
 export class RepeatDetector {
   private buffer = '';
   private total = 0;
@@ -111,16 +174,20 @@ export class RepeatDetector {
     const stable = strong && novelty <= 0.15;
     this.consecutive = stable && compatiblePeriod ? this.consecutive + 1 : stable ? 1 : 0;
     this.lastConfirmedPeriod = stable ? repeat.period : 0;
-    const phrase = this.reasoning && !codeLike(this.buffer.slice(-512))
-      ? phraseRepetition(this.buffer.slice(-512), this.config.minRepeats)
-        ?? (this.total >= this.config.minChars && !strong && !codeLike(this.buffer.slice(-1024)) ? phraseRepetition(this.buffer.slice(-1024), this.config.minRepeats, 64) : undefined)
+    const tail512 = this.buffer.slice(-512);
+    const tail1024 = this.buffer.slice(-1024);
+    const phrase = this.reasoning && canRunReasoningPhrase(tail512, this.config.minPeriod, this.config.maxPeriod, this.config.minRepeats)
+      ? phraseRepetition(tail512, this.config.minRepeats)
+        ?? (this.total >= this.config.minChars && !strong && canRunReasoningPhrase(tail1024, this.config.minPeriod, this.config.maxPeriod, this.config.minRepeats)
+          ? phraseRepetition(tail1024, this.config.minRepeats, 64)
+          : undefined)
       : undefined;
     const uncertainty = phrase?.changingNumberedUnits ? 'changing-numbered-units' : phrase?.changingUnits ? 'changing-units' : undefined;
     // Single-letter sentences need near-total coverage and stricter novelty;
     // the general periodic detector still excludes single-letter/data spam.
     const phraseStable = !!phrase && !uncertainty && phrase.coverage >= (phrase.singleLetter ? 0.9 : 0.75) && phraseNovelty <= (phrase.singleLetter ? 0.15 : 0.45);
     this.phraseConsecutive = phraseStable ? this.phraseConsecutive + 1 : 0;
-    if (phrase && (uncertainty || !repeat.repeats || this.phraseConsecutive >= this.config.confirmations)) return {
+    if (phrase && (uncertainty || !strong || this.phraseConsecutive >= this.config.confirmations)) return {
       period: phrase.period, repeats: phrase.repeats, coverage: phrase.coverage,
       method: 'phrase', ...(uncertainty ? { uncertainty } : {}), novelty: phraseNovelty, score: phraseStable ? 96 : 75,
       confirmed: this.phraseConsecutive >= this.config.confirmations, chars: this.total,

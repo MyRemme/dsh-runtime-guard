@@ -304,6 +304,29 @@ it('validates archive identity, compatibility, dependencies and installation scr
     const data = await fixture(changes); await expect(validateArchive(data.file, '0.1.8', '0.2.1-rc.2')).rejects.toThrow(code);
   }
   const linked = await fixture({}, true); await expect(validateArchive(linked.file, '0.1.8', '0.2.1-rc.2')).rejects.toThrow('invalid-archive');
+
+  const dir = await mkdtemp(join(tmpdir(), 'flash-update-bundled-')); roots.push(dir);
+  const pkgRoot = join(dir, 'package');
+  await mkdir(join(pkgRoot, 'dist'), { recursive: true });
+  await mkdir(join(pkgRoot, 'client'));
+  await mkdir(join(pkgRoot, 'node_modules/evil'), { recursive: true });
+  await writeFile(join(pkgRoot, 'package.json'), JSON.stringify({ name: 'dsh-runtime-guard', version: '0.1.8', engines: { node: '>=22.18.0', dsh: '0.2.1-rc.2' } }));
+  await writeFile(join(pkgRoot, 'dist/index.js'), 'export const name="test";');
+  await writeFile(join(pkgRoot, 'client/client.js'), '/* fixture */');
+  await writeFile(join(pkgRoot, 'cordis.patch.yml'), '[]');
+  await writeFile(join(pkgRoot, 'node_modules/evil/package.json'), JSON.stringify({ name: 'evil', version: '1.0.0', scripts: { postinstall: 'echo pwn' } }));
+  const bundledFile = join(dir, 'bundled.tgz'); await create({ cwd: dir, file: bundledFile, gzip: true }, ['package']);
+  await expect(validateArchive(bundledFile, '0.1.8', '0.2.1-rc.2')).rejects.toThrow('install-scripts');
+
+  await writeFile(join(pkgRoot, 'node_modules/evil/package.json'), '{"name":"evil","version":"1.0.0"}');
+  await writeFile(join(pkgRoot, 'package.json'), '{broken');
+  const corruptPkg = join(dir, 'corrupt.tgz'); await create({ cwd: dir, file: corruptPkg, gzip: true }, ['package']);
+  await expect(validateArchive(corruptPkg, '0.1.8', '0.2.1-rc.2')).rejects.toThrow('invalid-archive');
+});
+it('maps malformed fallback REST API JSON to invalid-release', async () => {
+  const { updater, transport } = await setup();
+  transport.mockImplementationOnce(async () => new Response('<html>not json</html>'));
+  expect((await updater.check()).error).toBe('invalid-release');
 });
 it('defers installation while a conversation is busy and retains restart-required across reload', async () => {
   const { updater, installBundle, idle, directory } = await setup({ busy: true });

@@ -284,6 +284,12 @@ it('links to the repository and exposes persistent automatic and manual update c
   await act(async () => { button('检查更新').click(); }); expect(call).toHaveBeenCalledWith('/runtime-guard', 'checkUpdates', {}, expect.anything());
   await act(async () => { button('安装更新').click(); }); expect(document.body.textContent).toContain('等待所有对话空闲后安装');
 });
+it('highlights the current up-to-date update status in green', async () => {
+  const update = { repository: 'https://github.com/MyRemme/dsh-runtime-guard', currentVersion: '0.2.5', latestVersion: '0.2.5', available: true, automatic: false, phase: 'current' };
+  await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : method === 'updates' ? update : baseline() }));
+  await selectTab('插件更新');
+  expect(document.querySelector('.fs-success')?.textContent).toBe('已是最新正式版');
+});
 it('registers discoverable native entries and renders actual monitoring state with working controls', async () => {
   const data = baseline();
   const call = vi.fn(async (_channel, method, payload) => {
@@ -568,4 +574,23 @@ it('switches mode, toggles per-session monitoring, alerts on tool-repeat, and pa
   await act(async () => { document.dispatchEvent(new dom.window.Event('visibilitychange')); });
   expect(snapshotCalls).toBeGreaterThan(beforeHidden);
   expect(document.querySelector('[role="alert"]').textContent).toContain('工具重复告警');
+});
+it('shows clear version diagnostic messages for guard unavailability and host-unverified safety blocks', async () => {
+  const data = {
+    ...baseline(),
+    mode: 'observe',
+    compatibility: { version: '9.9.9', guard: false, reason: 'unrecognized-host' },
+    operationSafety: {
+      enabled: true, state: 'blocked', reason: 'host-unverified',
+      hostVersion: '0.2.1-rc.4', verifiedHosts: ['0.2.1-rc.2', '0.2.2-rc.1'],
+      coveredTools: ['pwsh'], persistent: false, checked: 0, denied: 0, approvalRequests: 0, approved: 0, events: [],
+    },
+  };
+  await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : data }));
+  await selectTab('监控设置');
+  expect(document.body.textContent).toContain('9.9.9');
+  expect(document.body.textContent).toContain('防护停止');
+  await selectTab('操作防护');
+  expect(document.querySelector('[role="alert"]').textContent).toContain('0.2.1-rc.4');
+  expect(document.querySelector('[role="alert"]').textContent).toContain('0.2.1-rc.2、0.2.2-rc.1');
 });
