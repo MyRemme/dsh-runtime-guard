@@ -59,6 +59,22 @@ it('keeps one page mounted and navigates tabs with the keyboard', async () => {
   expect(document.querySelector('[aria-label="逐对话实时监控"]')).toBeNull();
   expect(document.querySelector('[aria-label="操作防护"]')).not.toBeNull();
 });
+it('uses the host main surface and keeps bounded panels only in plugin configuration slots', async () => {
+  const { slots } = await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : baseline() }));
+  expect(document.querySelector('.fs-mount').dataset.embedded).toBe('false');
+  expect(document.querySelector('.fs-root aside')).toBeNull();
+  expect(document.querySelector('[role="tablist"]').getAttribute('aria-orientation')).toBe('horizontal');
+  const Embedded = slots.find(slot => slot.meta.name === 'plugins.bundle.config').component;
+  expect(Embedded).toBe(slots.find(slot => slot.meta.name === 'plugins.row.config').component);
+  expect(Embedded).not.toBe(slots.find(slot => slot.meta.name === 'main').component);
+  await act(async () => { root.render(React.createElement(Embedded)); });
+  expect(document.querySelector('.fs-mount').dataset.embedded).toBe('true');
+  await act(async () => { button('全屏查看').click(); });
+  expect(document.querySelector('[aria-modal="true"]')).not.toBeNull();
+  await act(async () => { button('退出全屏').click(); });
+  expect(document.querySelector('.fs-mount').dataset.embedded).toBe('true');
+  expect(document.querySelector('.fs-surface').parentElement).toBe(document.querySelector('.fs-mount'));
+});
 it('switches narrow monitor lists and opens a conversation record in the event pane', async () => {
   const items = ['a', 'b'].map(id => ({ ...sessionData(), sessionId: id, sessionKey: 'key-' + id, tracked: true }));
   const events = items.map(item => ({ kind: 'tool-repeat', session: item.sessionKey, repeats: 4 }));
@@ -105,7 +121,7 @@ it('preserves filters and scroll across fullscreen, traps focus, restores the pa
   expect(button('显示全部对话')).toBeDefined();
   const last = document.querySelector('[aria-label="检测记录"] summary');
   await act(async () => { last.focus(); last.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true })); });
-  expect(document.activeElement).toBe(document.querySelector('[role="tab"][aria-selected="true"]'));
+  expect(document.activeElement).toBe(button('启用监控'));
   await act(async () => { document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   expect(document.querySelector('[aria-modal="true"]')).toBeNull();
   expect(document.activeElement).toBe(expand);
