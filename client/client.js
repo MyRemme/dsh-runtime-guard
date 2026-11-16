@@ -7,20 +7,23 @@ window.__ModuleLoader__.load({
     const h = React.createElement, PANEL = 'runtime-guard';
     const css = `
       .fs-root,.fs-dialog,.fs-toast{font:13px/20px var(--dsw-font-family,system-ui,sans-serif);letter-spacing:0;color:var(--dsw-alias-label-primary);box-sizing:border-box;overflow-wrap:anywhere}
-      .fs-root{height:100%;overflow:auto;padding:28px 32px 40px}.fs-page{max-width:960px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+      .fs-mount{height:min(820px,calc(100dvh - 64px));max-height:100%;min-height:0;width:100%}.fs-surface{height:100%;min-height:0}.fs-surface[data-fullscreen=true]{position:fixed;inset:0;z-index:1200;height:100dvh;background:var(--dsw-alias-bg-base,#fff)}
+      .fs-root{height:100%;min-height:0;overflow:hidden;padding:20px 24px 12px;container:fs-panel / inline-size;background:var(--dsw-alias-bg-base,#fff)}.fs-page{max-width:1280px;height:100%;min-height:0;margin:0 auto;display:flex;flex-direction:column;gap:16px}
       .fs-head,.fs-row,.fs-tools,.fs-state,.fs-event-head{display:flex;align-items:center;gap:8px;min-width:0}.fs-head{justify-content:space-between;gap:16px;flex-wrap:wrap}.fs-head h2{font-size:20px;line-height:28px;font-weight:500;margin:0}.fs-sub,.fs-muted{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}.fs-sub{margin:4px 0 0}.fs-tools{gap:4px;flex-wrap:wrap}.fs-state{font-size:12px;color:var(--dsw-alias-label-secondary)}
       .fs-dot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary);flex:none}.fs-state[data-tone=warn],.fs-warn{color:var(--dsw-alias-state-warn-primary)}.fs-state[data-tone=warn] .fs-dot{background:currentColor}.fs-state[data-tone=off]{color:var(--dsw-alias-label-tertiary)}.fs-state[data-tone=off] .fs-dot{background:currentColor}
       .fs-icon-button{width:28px!important;height:28px!important;padding:0!important;flex:none}.fs-action{height:28px;font-size:12px!important}.fs-switch{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--dsw-alias-label-secondary);margin-right:12px}
-      .fs-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0;border-top:.5px solid var(--dsw-alias-border-l2);border-bottom:.5px solid var(--dsw-alias-border-l2)}.fs-stat{padding:18px 16px;border-left:.5px solid var(--dsw-alias-border-l2)}.fs-stat:first-child{border-left:0;padding-left:0}.fs-stat dt{color:var(--dsw-alias-label-tertiary);font-size:12px}.fs-stat dd{font-size:24px;line-height:32px;font-weight:500;font-variant-numeric:tabular-nums;margin:4px 0 0}
+      .fs-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0;border-bottom:.5px solid var(--dsw-alias-border-l2)}.fs-stat{padding:8px 16px 12px;border-left:.5px solid var(--dsw-alias-border-l2)}.fs-stat:first-child{border-left:0;padding-left:0}.fs-stat dt{color:var(--dsw-alias-label-tertiary);font-size:12px}.fs-stat dd{font-size:22px;line-height:28px;font-weight:500;font-variant-numeric:tabular-nums;margin:2px 0 0}
       .fs-section h3{font-size:14px;line-height:22px;font-weight:500;margin:0}.fs-section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.fs-facts{margin:0}.fs-fact{display:flex;justify-content:space-between;align-items:baseline;gap:20px;padding:10px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}.fs-fact dt{color:var(--dsw-alias-label-secondary);flex:none}.fs-fact dd{margin:0;text-align:right;min-width:0}.fs-note{margin:10px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px}.fs-empty{padding:28px 0;color:var(--dsw-alias-label-tertiary);text-align:center;border-top:.5px solid var(--dsw-alias-border-l2)}
       .fs-events{list-style:none;padding:0;margin:0}.fs-event{padding:14px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}.fs-event-head{justify-content:space-between;align-items:baseline;gap:12px}.fs-event-title{font-weight:500;font-size:13px}.fs-event time{color:var(--dsw-alias-label-tertiary);font-size:11px;flex:none}.fs-event p{margin:5px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}.fs-event .fs-result{color:var(--dsw-alias-label-primary)}.fs-tag{font-size:11px;line-height:18px;padding:0 5px;border-radius:var(--dsw-radius-sm,4px);color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-interactive-bg-hover);white-space:nowrap}.fs-error{color:var(--dsw-alias-state-error-primary);margin:0}.fs-test{color:var(--dsw-alias-state-success-primary);margin:0}
       .fs-dock{position:relative;min-width:0;max-width:100%;display:inline-flex}.fs-dock-button{font:11px/18px var(--dsw-font-family,system-ui,sans-serif);color:var(--dsw-alias-label-tertiary);border:0;background:transparent;padding:2px 4px;border-radius:var(--dsw-radius-sm,4px);display:inline-flex;align-items:center;gap:5px;cursor:pointer;min-width:0;max-width:100%;white-space:nowrap}.fs-dock-button span{overflow:hidden;text-overflow:ellipsis}.fs-dock-button:hover{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}.fs-dock-button[data-tone=warn]{color:var(--dsw-alias-state-warn-primary)}.fs-dialog{position:fixed;z-index:1100;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg,8px);background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-panel,0 6px 24px #0002);padding:16px;overflow:auto}.fs-dialog h3{margin:0;font-size:14px;font-weight:500}.fs-dialog .fs-head{flex-wrap:nowrap}.fs-dialog .fs-events{margin-top:8px}.fs-dialog .fs-event:last-child{border-bottom:0}.fs-dialog .fs-stats{margin-top:14px}.fs-dialog .fs-stat{padding:8px}.fs-dialog .fs-stat:first-child{padding-left:0}.fs-dialog .fs-stat dd{font-size:18px;line-height:24px}.fs-dialog .fs-fact{font-size:12px;gap:12px}
       .fs-toast{position:fixed;right:20px;bottom:20px;z-index:1000;width:min(360px,calc(100vw - 40px));padding:14px 16px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg,8px);background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-panel,0 6px 24px #0002)}.fs-toast p{margin:5px 0 10px;font-size:12px;color:var(--dsw-alias-label-secondary)}.fs-summary{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
-      .fs-root button:focus-visible,.fs-dock-button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.fs-icon{display:inline-flex;flex:none;position:relative}.fs-icon .fs-dot{position:absolute;right:0;top:0;border:1px solid var(--dsw-alias-bg-base)}
-      @media(max-width:560px){.fs-root{padding:20px 16px 28px}.fs-page{gap:24px}.fs-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.fs-stat:nth-child(3){border-left:0;padding-left:0}.fs-stat:nth-child(n+3){border-top:.5px solid var(--dsw-alias-border-l2)}.fs-head{align-items:flex-start}.fs-tools{width:100%}.fs-event-head{flex-wrap:wrap;gap:2px}.fs-fact{gap:12px}.fs-dialog .fs-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      .fs-root :focus-visible,.fs-dock-button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.fs-icon{display:inline-flex;flex:none;position:relative}.fs-icon .fs-dot{position:absolute;right:0;top:0;border:1px solid var(--dsw-alias-bg-base)}
+      .fs-tabs{display:flex;gap:24px;border-bottom:1px solid var(--dsw-alias-border-l2);flex:none;overflow-x:auto}.fs-tab{font:inherit;white-space:nowrap;padding:0 0 10px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}.fs-tab[aria-selected=true]{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-business-primary)}
+      .fs-tabpanel{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}.fs-tabpanel[data-view=monitor]{overflow:hidden;display:flex;flex-direction:column;gap:16px}.fs-settings{display:flex;flex-direction:column;gap:24px;max-width:860px;padding:2px 4px 16px 0}.fs-monitor{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:24px;flex:1;min-height:0}.fs-monitor-section{display:flex;flex-direction:column;min-height:0;min-width:0}.fs-monitor-section>.fs-section-head{flex:none;margin-bottom:8px}.fs-monitor-section .fs-health-note{flex:none;font-size:11px;line-height:16px}.fs-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}.fs-search{position:relative;margin-bottom:8px;flex:none}.fs-search input{width:100%;box-sizing:border-box;padding:7px 10px 7px 30px;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:transparent;color:inherit;font:inherit}.fs-search-icon{position:absolute;left:9px;top:9px;display:flex;color:var(--dsw-alias-label-tertiary)}.fs-filter{margin-bottom:8px;display:flex;align-items:center;gap:8px;min-width:0}.fs-filter>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.fs-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;font-size:11px;line-height:16px}.fs-section-scroll{max-height:320px;overflow:auto;overscroll-behavior:contain}.fs-header-tools{flex-wrap:nowrap}.fs-header-tools .fs-switch{margin-right:4px;white-space:nowrap}.fs-head .fs-title{min-width:0;flex:1}.fs-head h2{font-size:18px;line-height:24px}.fs-root .fs-error,.fs-root .fs-test{font-size:12px;line-height:18px}
+      @container fs-panel (max-width:760px){.fs-monitor{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,.75fr);gap:16px}.fs-tabs{gap:20px}.fs-head{gap:10px}.fs-head .fs-title{flex-basis:100%}.fs-header-tools{width:100%;justify-content:flex-end}.fs-header-tools .fs-switch{margin-right:auto}.fs-stat{padding-right:8px;padding-left:10px}.fs-fact{gap:12px}.fs-page{gap:12px}.fs-root .fs-event-head{flex-wrap:wrap;gap:2px}}
+      @media(max-width:560px){.fs-root{padding:14px 14px 10px}.fs-dialog .fs-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.fs-dialog .fs-stat:nth-child(3){border-left:0;padding-left:0}.fs-dialog .fs-stat:nth-child(n+3){border-top:.5px solid var(--dsw-alias-border-l2)}}
       .fs-dialog,.fs-toast{background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-prominent,0 6px 24px #0002)}
-      .fs-conversations{display:flex;flex-direction:column;border-top:.5px solid var(--dsw-alias-border-l2)}.fs-conversation{padding:14px 0;border-bottom:.5px solid var(--dsw-alias-border-l2);display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.fs-conversation-main{min-width:0;flex:1}.fs-conversation-title{font-weight:500;margin-bottom:5px}.fs-live{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}.fs-event-context{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}.fs-link{border:0;background:transparent;color:var(--dsw-alias-state-business-primary);font:inherit;padding:0;text-align:left;cursor:pointer}.fs-link:disabled{color:var(--dsw-alias-label-secondary);cursor:default}.fs-health-note{margin:8px 0 0;font-size:12px;color:var(--dsw-alias-label-tertiary)}
-      @media(max-width:560px){.fs-conversation{flex-direction:column}.fs-conversation-main{width:100%}.fs-conversation .fs-tools{width:auto}}
+      .fs-conversations{border-top:.5px solid var(--dsw-alias-border-l2)}.fs-conversation{padding:10px 2px;border-bottom:.5px solid var(--dsw-alias-border-l2);min-width:0}.fs-conversation-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.fs-conversation-main{min-width:0;flex:1}.fs-conversation-title{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fs-conversation .fs-tools{flex:none;flex-wrap:nowrap;gap:0}.fs-conversation .fs-state{font-size:11px}.fs-conversation-meta{display:flex;flex-wrap:wrap;gap:2px 12px;margin-top:4px;color:var(--dsw-alias-label-tertiary);font-size:11px;font-variant-numeric:tabular-nums}.fs-conversation details{margin-top:4px}.fs-conversation summary{width:fit-content;cursor:pointer;color:var(--dsw-alias-label-tertiary);font-size:11px}.fs-conversation details[open]{padding-bottom:4px}.fs-live{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}.fs-event-context{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}.fs-link{border:0;background:transparent;color:var(--dsw-alias-state-business-primary);font:inherit;padding:0;text-align:left;cursor:pointer}.fs-link:disabled{color:var(--dsw-alias-label-secondary);cursor:default}.fs-health-note{margin:8px 0 0;font-size:12px;color:var(--dsw-alias-label-tertiary)}
       .fs-model-modes{display:flex;flex-wrap:wrap;min-width:0;gap:18px;border:0;padding:0;margin:12px 0}.fs-model-modes label,.fs-model-option{display:flex;align-items:center;gap:8px}.fs-model-list{max-height:260px;overflow:auto;border-top:.5px solid var(--dsw-alias-border-l2);margin:12px 0}.fs-model-option{padding:8px 0;cursor:pointer}.fs-model-option span{min-width:0;overflow-wrap:anywhere}.fs-model-option small{display:block;color:var(--dsw-alias-label-tertiary)}.fs-model-option input,.fs-model-modes input{flex-shrink:0;accent-color:var(--dsw-alias-state-business-primary)}.fs-model-search{box-sizing:border-box;width:100%;padding:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:transparent;color:inherit;font:inherit}
     `;
     const labels = {
@@ -216,35 +219,95 @@ window.__ModuleLoader__.load({
       }
       function Panel({ view } = {}) {
         const state = useState(), data = state.data, online = data && !state.error;
-        const [filter, setFilter] = React.useState('');
+        const [filter, setFilter] = React.useState(''), [tab, setTab] = React.useState('monitor'), [query, setQuery] = React.useState('');
+        const [fullscreen, setFullscreen] = React.useState(false);
+        const mount = React.useRef(null), restoreFocus = React.useRef(null), eventRegion = React.useRef(null), id = React.useId();
+        const [surface] = React.useState(() => { const node = document.createElement('div'); node.className = 'fs-surface'; return node; });
         React.useEffect(() => service('sessions')?.list?.subscribe?.(() => controller.refresh()), []);
+        React.useLayoutEffect(() => { if (eventRegion.current) eventRegion.current.scrollTop = 0; }, [filter]);
+        React.useLayoutEffect(() => {
+          if (view === 'summary') { surface.remove(); return; }
+          const previous = document.activeElement;
+          const scrollPositions = [...surface.querySelectorAll('.fs-scroll,.fs-tabpanel,.fs-section-scroll,.fs-model-list')].map(node => [node, node.scrollTop]);
+          const restoreScroll = () => scrollPositions.forEach(([node, top]) => { node.scrollTop = top; });
+          (fullscreen ? document.body : mount.current)?.appendChild(surface);
+          surface.dataset.fullscreen = String(fullscreen);
+          if (!fullscreen) { restoreFocus.current?.focus({ preventScroll: true }); restoreFocus.current = null; restoreScroll(); return; }
+          const overflow = document.body.style.overflow;
+          const background = [...document.body.children].filter(node => node !== surface);
+          const inert = background.map(node => node.hasAttribute('inert'));
+          background.forEach(node => node.setAttribute('inert', ''));
+          document.body.style.overflow = 'hidden';
+          surface.querySelector('[aria-label="退出全屏"]')?.focus({ preventScroll: true });
+          restoreScroll();
+          const onKey = event => {
+            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setFullscreen(false); }
+            if (event.key !== 'Tab') return;
+            const targets = [...surface.querySelectorAll('button:not(:disabled):not([tabindex="-1"]),input:not(:disabled),a[href],summary,[tabindex="0"]')].filter(node => !node.closest('[hidden]') && !node.closest('details:not([open]) > :not(summary)'));
+            const first = targets[0], last = targets[targets.length - 1];
+            if (event.shiftKey && (document.activeElement === first || !surface.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && (document.activeElement === last || !surface.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+          };
+          document.addEventListener('keydown', onKey, true);
+          return () => {
+            document.removeEventListener('keydown', onKey, true);
+            background.forEach((node, index) => { if (!inert[index]) node.removeAttribute('inert'); });
+            document.body.style.overflow = overflow;
+            restoreFocus.current = previous;
+            if (!mount.current && previous?.isConnected) previous.focus({ preventScroll: true });
+          };
+        }, [fullscreen, view]);
+        React.useEffect(() => () => surface.remove(), []);
         const label = !online ? (state.error || '连接中') : data.monitoring ? '监控在线' : '监控已暂停';
         if (view === 'summary') return h('div', { className: 'fs-summary' }, status(label, online && data.monitoring ? 'on' : 'off'), data && `已监控 ${data.monitoredRequests} 次 · 确认重复 ${data.confirmed} 次`);
         const events = data?.events.filter(e => e.kind !== 'compatibility' && (!filter || e.session === filter)) || [];
-        return h('section', { className: 'fs-root', 'aria-label': '运行时护栏监控面板' }, h('div', { className: 'fs-page' },
-          h('header', { className: 'fs-head' }, h('div', null, h('h2', null, 'DSH 运行时护栏'), h('p', { className: 'fs-sub' }, '防空转监控 · 操作安全防护与处理记录')),
-            h('div', { className: 'fs-tools' }, h('span', { className: 'fs-switch' }, '启用监控', h(UI.Switch, { label: '启用监控', checked: Boolean(data?.monitoring), disabled: !online || state.busy, onChange: enabled => controller.action('setMonitoring', { enabled }) })),
-              command('刷新状态', controller.refresh, UI.IconRefreshOutlineRegular, state.busy, true), command('离线自检', () => controller.action('selfTest'), UI.IconInfoOutlineRegular, !online || state.busy), command('导出诊断日志', () => controller.action('export'), UI.IconDownloadOutlineRegular, !online || state.busy, true))),
+        const tabs = [['monitor', '实时监控'], ['safety', '操作防护'], ['settings', '监控设置'], ['updates', '插件更新']];
+        const visible = state.conversations.filter(item => `${conversationName(item)} ${item.sessionKey}`.toLowerCase().includes(query.trim().toLowerCase()));
+        const onTabKey = event => {
+          const index = tabs.findIndex(([key]) => key === tab);
+          const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+          if (next < 0) return;
+          event.preventDefault(); setTab(tabs[next][0]); surface.querySelector(`[id="${id}-${tabs[next][0]}"]`)?.focus();
+        };
+        const content = h('section', { className: 'fs-root', role: fullscreen ? 'dialog' : undefined, 'aria-modal': fullscreen ? true : undefined, 'aria-label': '运行时护栏监控面板' }, h('div', { className: 'fs-page' },
+          h('header', { className: 'fs-head' }, h('div', { className: 'fs-title' }, h('h2', null, 'DSH 运行时护栏')),
+            h('div', { className: 'fs-tools fs-header-tools' }, h('span', { className: 'fs-switch' }, '启用监控', h(UI.Switch, { label: '启用监控', checked: Boolean(data?.monitoring), disabled: !online || state.busy, onChange: enabled => controller.action('setMonitoring', { enabled }) })),
+              command('刷新状态', controller.refresh, UI.IconRefreshOutlineRegular, state.busy, true), command('离线自检', () => controller.action('selfTest'), UI.IconInfoOutlineRegular, !online || state.busy, true), command('导出诊断日志', () => controller.action('export'), UI.IconDownloadOutlineRegular, !online || state.busy, true),
+              command(fullscreen ? '退出全屏' : '全屏查看', () => setFullscreen(value => !value), fullscreen ? UI.IconCloseOutlineRegular : UI.IconFullscreenOutlineRegular, false, true))),
+          h('nav', { className: 'fs-tabs', role: 'tablist', 'aria-label': '护栏页面', onKeyDown: onTabKey }, ...tabs.map(([key, text]) => h('button', { key, id: `${id}-${key}`, type: 'button', role: 'tab', className: 'fs-tab', 'aria-selected': tab === key, 'aria-controls': `${id}-content`, tabIndex: tab === key ? 0 : -1, onClick: () => setTab(key) }, text))),
           state.error && h('p', { role: 'alert', className: 'fs-error' }, state.error), state.test && h('p', { role: 'status', className: 'fs-test' }, state.test),
-          data && h(React.Fragment, null,
+          h('div', { id: `${id}-content`, role: 'tabpanel', 'aria-labelledby': `${id}-${tab}`, className: 'fs-tabpanel', 'data-view': tab },
+          tab === 'monitor' && (data ? h(React.Fragment, null,
             h('dl', { className: 'fs-stats' }, stat('已监控请求', data.monitoredRequests), stat('当前请求', data.activeRequests), stat('确认重复', data.confirmed), stat('已提交纠正', data.recoverySubmitted)),
+            h('div', { className: 'fs-monitor' },
+            h('section', { className: 'fs-section fs-monitor-section', 'aria-label': '逐对话实时监控' },
+              h('div', { className: 'fs-section-head' }, h('h3', null, '对话'), h('span', { className: 'fs-muted', 'aria-live': 'polite' }, `${query.trim() ? `${visible.length} / ` : ''}${state.conversations.length} 个`)),
+              h('div', { className: 'fs-search' }, h('span', { className: 'fs-search-icon' }, icon(UI.IconSearchOutlineRegular)), h('input', { type: 'search', value: query, placeholder: '搜索对话', 'aria-label': '搜索对话', onChange: event => setQuery(event.target.value) })),
+              (state.error || state.conversationError) && h('p', { className: 'fs-error' }, '连接中断，以下为上次同步数据，不能判断当前模型状态。'),
+              h('div', { className: 'fs-conversations fs-scroll', role: 'region', 'aria-label': '对话列表', tabIndex: 0 }, visible.length ? visible.map(item => {
+                const current = state.error || state.conversationError ? { label: '状态已过期 · 等待重新连接', tone: 'off' } : health(item);
+                const paused = item.sessionEnabled === false || item.coverage === 'disabled';
+                return h('article', { className: 'fs-conversation', key: item.sessionKey },
+                  h('div', { className: 'fs-conversation-head' }, h('div', { className: 'fs-conversation-title', title: conversationName(item) }, conversationName(item)),
+                    h('div', { className: 'fs-tools' }, command(paused ? '启用此对话监控' : '暂停此对话监控', () => controller.action('setSessionEnabled', { sessionId: item.sessionId, enabled: paused }), paused ? UI.IconPlayOutlineRegular : UI.IconPauseOutlineRegular, state.busy, true), command('查看此对话记录', () => setFilter(item.sessionKey), UI.IconInfoOutlineRegular, false, true), command('打开对话', () => openConversation(item), UI.IconLinkOutlineRegular, !service('uiWorkspace')?.openSession, true))),
+                  status(current.label, current.tone),
+                  h('div', { className: 'fs-conversation-meta' }, h('span', null, `第 ${item.live?.turn ?? item.turn ?? 0} 轮 · 步骤 ${item.live?.step ?? item.step ?? 0}`), h('span', null, `确认重复 ${item.confirmed} 次`), h('span', null, `已提交纠正 ${item.recoverySubmitted} 次`)),
+                  h('details', null, h('summary', null, '详情'), h(Live, { data: item }), h('p', { className: 'fs-muted' }, `${item.counterScope === 'retained-events' ? '保留事件中' : '累计'}${item.cancelRequested ? `请求中断 ${item.cancelRequested} 次` : '未拦截、未中断'}`), !item.tracked && h('p', { className: 'fs-muted' }, '会话已不在实时跟踪中，仅显示保留事件。')));
+              }) : h('div', { className: 'fs-empty' }, query.trim() ? '没有匹配的对话' : '尚无已跟踪的对话')),
+              h('p', { className: 'fs-health-note' }, '“暂未发现循环”仅描述已收到的输出。')),
+            h('section', { className: 'fs-section fs-monitor-section', 'aria-label': '检测与处理' }, h('div', { className: 'fs-section-head' }, h('h3', null, '检测与处理'), h('span', { className: 'fs-muted' }, `${events.length} 条记录`)),
+              filter && h('div', { className: 'fs-filter' }, h('span', { className: 'fs-muted' }, conversationName(state.conversations.find(item => item.sessionKey === filter) || { sessionKey: filter })), command('显示全部对话', () => setFilter(''), UI.IconCloseOutlineRegular, false, true)),
+              h('div', { className: 'fs-scroll', role: 'region', 'aria-label': '检测记录', tabIndex: 0, ref: eventRegion }, events.length ? h(Events, { events, mode: data.mode, conversations: state.conversations }) : h('div', { className: 'fs-empty' }, '尚无检测记录'))))) : h('div', { className: 'fs-empty' }, state.error || '正在连接监控服务')),
+          tab === 'safety' && h('div', { className: 'fs-settings' }, h(OperationSafety, { state })),
+          tab === 'settings' && h('div', { className: 'fs-settings' }, data &&
             h('section', { className: 'fs-section' }, h('div', { className: 'fs-section-head' }, h('h3', null, '运行状态'), status(label, online && data.monitoring ? 'on' : 'off')),
               h('fieldset', { className: 'fs-model-modes', disabled: !online || state.busy, 'aria-label': '处理模式选择' },
                 ...[['observe', '仅观察'], ['guard', '防护停止'], ['assist', '有限纠正']].map(([key, text]) => h('label', { key },
                   h('input', { type: 'radio', name: 'flash-mode', value: key, checked: data.mode === key, disabled: !online || state.busy || (key === 'guard' && data.compatibility?.guard === false), onChange: () => controller.action('setMode', { mode: key }) }), text))),
-              h('dl', { className: 'fs-facts' }, fact('处理模式', modeName(data.mode)), fact('检测后动作', data.mode === 'guard' ? '确认推理重复后请求停止本轮' : data.mode === 'assist' ? '回合结束后可提交纠正' : '显示告警，不中断输出'), fact('最近监控', time(data.lastMonitoredAt)), fact('磁盘日志', !data.logging.enabled ? '未开启' : data.logging.healthy ? '写入正常' : '写入失败'))),
-            h('section', { className: 'fs-section', 'aria-label': '逐对话实时监控' }, h('div', { className: 'fs-section-head' }, h('h3', null, '对话实时监控'), h('span', { className: 'fs-muted' }, '每 2 秒同步')),
-              (state.error || state.conversationError) && h('p', { className: 'fs-error' }, '连接中断，以下为上次同步数据，不能判断当前模型状态。'),
-              h('div', { className: 'fs-conversations' }, state.conversations.length ? state.conversations.map(item => { const current = state.error || state.conversationError ? { label: '状态已过期 · 等待重新连接', tone: 'off' } : health(item); const pausedSession = item.sessionEnabled === false || item.coverage === 'disabled'; return h('article', { className: 'fs-conversation', key: item.sessionKey },
-                h('div', { className: 'fs-conversation-main' }, h('div', { className: 'fs-conversation-title' }, conversationName(item)), status(current.label, current.tone), h(Live, { data: item }),
-                  h('div', { className: 'fs-live' }, `${item.counterScope === 'retained-events' ? '保留事件中' : '累计'}确认重复 ${item.confirmed} 次 · 已提交纠正 ${item.recoverySubmitted} 次 · ${item.cancelRequested ? `请求中断 ${item.cancelRequested} 次` : '未拦截、未中断'}`), !item.tracked && h('p', { className: 'fs-muted' }, '会话已不在实时跟踪中，仅显示保留事件。')),
-                h('div', { className: 'fs-tools' }, command(pausedSession ? '启用此对话监控' : '暂停此对话监控', () => controller.action('setSessionEnabled', { sessionId: item.sessionId, enabled: pausedSession }), null, state.busy), command('查看此对话记录', () => setFilter(item.sessionKey), UI.IconInfoOutlineRegular, false), command('打开对话', () => openConversation(item), null, !service('uiWorkspace')?.openSession))); }) : h('div', { className: 'fs-empty' }, '尚无已跟踪的对话；下一次匹配的模型请求开始后自动显示。')),
-              h('p', { className: 'fs-health-note' }, '实时观察已收到的输出；“暂未发现循环”不保证后续不会重复，也不代表任务结果正确。长时间没有输出不直接判定为低熵循环。')),
-            h('section', { className: 'fs-section' }, h('div', { className: 'fs-section-head' }, h('h3', null, '检测与处理'), h('span', { className: 'fs-muted' }, `${events.length} 条记录`)),
-              filter && command('显示全部对话', () => setFilter(''), UI.IconCloseOutlineRegular, false),
-              events.length ? h(Events, { events, mode: data.mode, conversations: state.conversations }) : h('div', { className: 'fs-empty' }, '尚无检测记录'), h('p', { className: 'fs-note' }, '显示发生在哪个对话、第几轮、推理或正文的重复特征、原因和实际动作。不保存推理正文、工具参数或命令；导出不包含对话名称和原始 ID。'))),
-          h(OperationSafety, { state }), h(ModelScope, { state }), h(Updates, { state }),
-          h('footer', { className: 'fs-muted' }, `最近同步 ${time(state.updatedAt)}`)));
+              h('dl', { className: 'fs-facts' }, fact('处理模式', modeName(data.mode)), fact('检测后动作', data.mode === 'guard' ? '确认推理重复后请求停止本轮' : data.mode === 'assist' ? '回合结束后可提交纠正' : '显示告警，不中断输出'), fact('最近监控', time(data.lastMonitoredAt)), fact('磁盘日志', !data.logging.enabled ? '未开启' : data.logging.healthy ? '写入正常' : '写入失败'))), h(ModelScope, { state })),
+          tab === 'updates' && h('div', { className: 'fs-settings' }, h(Updates, { state }))),
+          h('footer', { className: 'fs-footer fs-muted' }, status(label, online && data.monitoring ? 'on' : 'off'), h('span', null, `最近同步 ${time(state.updatedAt)}`))));
+        return h(React.Fragment, null, h('div', { className: 'fs-mount', ref: mount }), createPortal(content, surface));
       }
       function OperationSafety({ state }) {
         const value = state.data?.operationSafety;
@@ -274,7 +337,7 @@ window.__ModuleLoader__.load({
           value && h(React.Fragment, null,
             h('dl', { className: 'fs-facts' }, fact('已检查', value.checked), fact('已阻止 / 未获批准', value.denied), fact('审批请求', value.approvalRequests), fact('单次批准', value.approved), fact('宿主版本', value.hostVersion), fact('设置保存', value.persistent ? '重启后保留' : '仅本次运行')),
             h('p', { className: 'fs-note' }, `覆盖工具：${value.coveredTools.join('、')}。权限服务或执行前接口异常时会显示原因并阻止受保护调用。操作防护不能代替系统沙盒。`),
-            value.events.length ? h('ol', { className: 'fs-events' }, ...value.events.slice(0, 20).map((event, index) => h('li', { key: `${event.time}-${index}`, className: 'fs-event' },
+            value.events.length ? h('ol', { className: 'fs-events fs-section-scroll', 'aria-label': '操作防护记录', tabIndex: 0 }, ...value.events.slice(0, 20).map((event, index) => h('li', { key: `${event.time}-${index}`, className: 'fs-event' },
               h('strong', null, `${actions[event.action] || event.action} · ${event.tool}`),
               h('p', null, rules[event.rule] || event.rule), h('small', { className: 'fs-muted' }, `${time(event.time)} · ${event.session} · ${event.mode}`)))) : h('p', { className: 'fs-muted' }, '尚无操作防护记录。'),
             h('p', { className: 'fs-note' }, '完整命令和参数在 DSH 原生审批中展示。此处及诊断导出仅保留原因与结果，不保存命令正文。')));

@@ -15,7 +15,9 @@ dsh plugin --profile desktop add './dsh-runtime-guard-x.y.z.tgz'
 
 如之前安装过旧插件 `dsh-flash-stabilizer`，建议先卸载旧包再安装本包；原有 `.flash-stabilizer/` 下的模式、模型范围与操作防护配置会在首次读取时自动兼容迁移至 `.runtime-guard/`。
 
-打开 DSH 的「运行时护栏」面板。默认启用监控并只告警。可在面板直接切换处理模式（`observe` / `guard` / `assist`）、按对话暂停或恢复监控；需要缩小范围时，选择「仅选中的模型」，按渠道勾选模型并保存。设置保存在当前 profile，重启后恢复。
+打开 DSH 的「运行时护栏」面板。界面分为「实时监控」「操作防护」「监控设置」「插件更新」四个页面；对话与检测记录在各自的固定区域内滚动，不会随记录数量撑长页面。对话可搜索、展开详情、暂停监控或打开原对话；右上角的全屏按钮保留当前页面、筛选和滚动位置，关闭按钮或 Escape 返回。
+
+默认启用监控并只告警。处理模式（`observe` / `guard` / `assist`）及模型范围在「监控设置」中调整；需要缩小范围时，选择「仅选中的模型」，按渠道勾选模型并保存。设置保存在当前 profile，重启后恢复。
 
 | 模式 | 行为 |
 | --- | --- |
@@ -23,11 +25,11 @@ dsh plugin --profile desktop add './dsh-runtime-guard-x.y.z.tgz'
 | `guard` | 确认推理重复后请求宿主停止本轮，单独显示宿主的停止确认 |
 | `assist` | 当前回合结束后可提交独立的纠正回合，每个用户任务默认最多两次 |
 
-模式可在「运行时护栏」面板的运行状态区实时切换，也可通过 profile 的 `cordis.patch.yml` 中 `id: runtime-guard` 对应的 `config.mode` 设置。插件要求 Node.js 22.18.0 或更新版本。
+模式可在「运行时护栏」面板的「监控设置」页面实时切换，也可通过 profile 的 `cordis.patch.yml` 中 `id: runtime-guard` 对应的 `config.mode` 设置。插件要求 Node.js 22.18.0 或更新版本。
 
 ## 操作防护
 
-在同一面板的「操作防护」区域打开独立开关，或设置 `config.operationSafety: true`。设置按 profile 保存；面板展示是否生效、检查与审批计数，以及最近的阻止原因和审批结果。整个插件被禁用或卸载时，两项功能都会停止。
+在同一面板的「操作防护」页面打开独立开关，或设置 `config.operationSafety: true`。设置按 profile 保存；面板展示是否生效、检查与审批计数，以及最近的阻止原因和审批结果。整个插件被禁用或卸载时，两项功能都会停止。
 
 权限来自宿主当前会话的 `sandboxPolicy.resolve({session})`，每次调用重新读取。模型传入的 `sandbox_permissions` 不会切换用户选择的模式。
 

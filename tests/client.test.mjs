@@ -47,6 +47,68 @@ async function mount(call, sessionId, services = {}, withPanel = false) {
   return { slots, url, selectPanel };
 }
 const button = text => [...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === text || b.textContent === text);
+const selectTab = async text => { await act(async () => { button(text).click(); }); };
+it('keeps one page mounted and navigates tabs with the keyboard', async () => {
+  await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : baseline() }));
+  expect(document.querySelectorAll('[role="tabpanel"]')).toHaveLength(1);
+  expect(document.querySelector('[aria-label="操作防护"]')).toBeNull();
+  const first = document.querySelector('[role="tab"][aria-selected="true"]');
+  await act(async () => { first.focus(); first.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })); });
+  expect(document.activeElement.textContent).toBe('操作防护');
+  expect(document.activeElement.getAttribute('aria-selected')).toBe('true');
+  expect(document.querySelector('[aria-label="逐对话实时监控"]')).toBeNull();
+  expect(document.querySelector('[aria-label="操作防护"]')).not.toBeNull();
+});
+it('preserves filters and scroll across fullscreen, traps focus, restores the page and cleans up on unmount', async () => {
+  const items = ['a', 'b'].map(id => ({ ...sessionData(), sessionId: id, sessionKey: 'key-' + id, tracked: true }));
+  const event = { kind: 'tool-repeat', repeats: 4, session: 'key-a' };
+  await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? items : { ...baseline(), events: [event] } }));
+  await act(async () => { button('查看此对话记录').click(); });
+  const scroll = document.querySelector('[aria-label="对话列表"]'); scroll.scrollTop = 42;
+  const expand = button('全屏查看');
+  await act(async () => { expand.focus(); expand.click(); });
+  expect(document.querySelector('[aria-modal="true"]')).not.toBeNull();
+  expect(document.querySelector('.fs-surface').parentElement).toBe(document.body);
+  expect(document.querySelector('#root').hasAttribute('inert')).toBe(true);
+  expect(document.body.style.overflow).toBe('hidden');
+  expect(document.activeElement).toBe(button('退出全屏'));
+  expect(document.querySelector('[aria-label="对话列表"]')).toBe(scroll);
+  expect(scroll.scrollTop).toBe(42);
+  expect(button('显示全部对话')).toBeDefined();
+  const last = document.querySelector('[aria-label="检测记录"]');
+  await act(async () => { last.focus(); last.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true })); });
+  expect(document.activeElement).toBe(button('启用监控'));
+  await act(async () => { document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  expect(document.querySelector('[aria-modal="true"]')).toBeNull();
+  expect(document.activeElement).toBe(expand);
+  expect(document.body.style.overflow).toBe('');
+  expect(document.querySelector('#root').hasAttribute('inert')).toBe(false);
+  expect(scroll.scrollTop).toBe(42);
+  await act(async () => { button('全屏查看').click(); });
+  await act(async () => { root.render(null); });
+  expect(document.querySelector('.fs-surface')).toBeNull();
+  expect(document.body.style.overflow).toBe('');
+  expect(document.querySelector('#root').hasAttribute('inert')).toBe(false);
+});
+it('keeps unsaved model settings when entering and leaving fullscreen', async () => {
+  const settings = { scope: 'all', selections: [], persistent: true, availableModels: [] };
+  await mount(async (_channel, method) => ({ ok: true, value: ['modelScope', 'refreshModels'].includes(method) ? settings : method === 'conversations' ? [] : baseline() }));
+  await selectTab('监控设置');
+  await act(async () => { document.querySelector('input[value="selected"]').click(); button('全屏查看').click(); });
+  expect(document.querySelector('input[value="selected"]').checked).toBe(true);
+  await act(async () => { button('退出全屏').click(); });
+  expect(document.querySelector('input[value="selected"]').checked).toBe(true);
+  expect(button('保存监控范围').disabled).toBe(false);
+});
+it('removes a fullscreen surface when the host changes the panel into a summary', async () => {
+  const { slots } = await mount(async () => ({ ok: true, value: baseline() }));
+  await act(async () => { button('全屏查看').click(); });
+  const Panel = slots.find(s => s.meta.name === 'main').component;
+  await act(async () => { root.render(React.createElement(Panel, { view: 'summary' })); });
+  expect(document.querySelector('.fs-surface')).toBeNull();
+  expect(document.body.style.overflow).toBe('');
+  expect(document.querySelector('#root').hasAttribute('inert')).toBe(false);
+});
 it('shows independent operation protection, persists its toggle and reports unavailable protection', async () => {
   let safety = { enabled: false, state: 'disabled', reason: null, hostVersion: '0.2.2-rc.1', persistent: true,
     coveredTools: ['pwsh', 'write'], checked: 0, denied: 0, approvalRequests: 0, approved: 0, events: [] };
@@ -57,6 +119,7 @@ it('shows independent operation protection, persists its toggle and reports unav
     return { ok: true, value: method === 'conversations' ? [] : { ...baseline(), monitoring, operationSafety: structuredClone(safety) } };
   });
   await mount(call);
+  await selectTab('操作防护');
   const modeRules = document.querySelector('[aria-label="三种权限模式的放行与拦截规则"]').textContent;
   expect(modeRules).toContain('仅查看'); expect(modeRules).toContain('仅工作区修改'); expect(modeRules).toContain('完全权限');
   expect(modeRules).toContain('插件不额外拦截或审批');
@@ -73,6 +136,7 @@ it('shows independent operation protection, persists its toggle and reports unav
 it('retains the operation safety setting and displays save errors', async () => {
   const safety = { enabled: true, state: 'active', hostVersion: '0.2.2-rc.1', coveredTools: [], checked: 0, denied: 0, approvalRequests: 0, approved: 0, events: [] };
   await mount(async (_channel, method) => ({ ok: method !== 'setOperationSafety', value: method === 'conversations' ? [] : { ...baseline(), operationSafety: safety } }));
+  await selectTab('操作防护');
   await act(async () => { button('启用操作防护').click(); });
   expect(button('启用操作防护').getAttribute('aria-checked')).toBe('true');
   expect(document.body.textContent).toContain('操作防护设置保存失败');
@@ -87,6 +151,7 @@ it('defaults to all models and saves selected channel/model pairs while preservi
     if (method === 'setModelScope') { saves.push(structuredClone(payload)); settings = { ...settings, ...structuredClone(payload) }; }
     return { ok: true, value: ['modelScope', 'refreshModels', 'setModelScope'].includes(method) ? structuredClone(settings) : method === 'conversations' ? [] : baseline() };
   });
+  await selectTab('监控设置');
   expect(document.querySelector('input[value="all"]').checked).toBe(true);
   expect(document.body.textContent).toContain('当前生效：全部模型（所有渠道）');
   await act(async () => { document.querySelector('input[value="selected"]').click(); });
@@ -101,6 +166,7 @@ it('defaults to all models and saves selected channel/model pairs while preservi
 it('keeps an unsaved model selection and reports a failed save', async () => {
   const settings = { scope: 'all', selections: [], persistent: true, availableModels: [] };
   await mount(async (_channel, method) => ({ ok: method !== 'setModelScope', value: ['modelScope', 'refreshModels'].includes(method) ? settings : method === 'conversations' ? [] : baseline() }));
+  await selectTab('监控设置');
   await act(async () => { document.querySelector('input[value="selected"]').click(); });
   expect(document.body.textContent).toContain('保存后将不监控任何模型');
   await act(async () => { button('保存监控范围').click(); });
@@ -119,6 +185,7 @@ it.each(['response', 'error'])('keeps saved model scope when a stale poll finish
     if (method === 'setModelScope') settings = { ...settings, ...structuredClone(payload) };
     return { ok: true, value: ['modelScope', 'refreshModels', 'setModelScope'].includes(method) ? structuredClone(settings) : method === 'conversations' ? [] : baseline() };
   });
+  await selectTab('监控设置');
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
   await act(async () => { document.querySelector('input[value="selected"]').click(); });
   await act(async () => { button('保存监控范围').click(); });
@@ -145,6 +212,7 @@ it.each(['response', 'error'])('ignores a stale update poll %s after changing au
     if (method === 'setAutomaticUpdates') { update.automatic = payload.enabled; return { ok: true, value: { ...update } }; }
     return { ok: true, value: method === 'conversations' ? [] : baseline() };
   });
+  await selectTab('插件更新');
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
   await act(async () => { button('自动更新').click(); });
   expect(button('自动更新').getAttribute('aria-checked')).toBe('true');
@@ -165,6 +233,7 @@ it('links to the repository and exposes persistent automatic and manual update c
     return { ok: true, value: method === 'conversations' ? [] : ['updates', 'setAutomaticUpdates', 'checkUpdates', 'installUpdate'].includes(method) ? { ...update } : baseline() };
   });
   await mount(call);
+  await selectTab('插件更新');
   expect(document.querySelector('a[title="打开 GitHub 仓库"]').href).toBe(update.repository);
   expect(document.body.textContent).toContain('0.1.7'); expect(document.body.textContent).toContain('有新版本');
   await act(async () => { button('自动更新').click(); }); expect(update.automatic).toBe(true);
@@ -436,9 +505,11 @@ it('switches mode, toggles per-session monitoring, alerts on tool-repeat, and pa
     return { ok: true, value: structuredClone(data) };
   });
   await mount(call, 'a', {}, true);
+  await selectTab('监控设置');
   await act(async () => { document.querySelector('input[name="flash-mode"][value="guard"]').click(); });
   expect(call).toHaveBeenCalledWith('/runtime-guard', 'setMode', { mode: 'guard' }, expect.any(AbortSignal));
   expect(document.body.textContent).toContain('防护停止');
+  await selectTab('实时监控');
   await act(async () => { button('暂停此对话监控').click(); });
   expect(call).toHaveBeenCalledWith('/runtime-guard', 'setSessionEnabled', { sessionId: 'a', enabled: false }, expect.any(AbortSignal));
   expect(document.body.textContent).toContain('此对话未启用');
