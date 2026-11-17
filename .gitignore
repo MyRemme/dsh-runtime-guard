@@ -5,6 +5,7 @@ artifacts/
 .compat-cache/
 coverage/
 *.tgz
+!prereleases/*.tgz
 *.log
 .env
 .env.*
