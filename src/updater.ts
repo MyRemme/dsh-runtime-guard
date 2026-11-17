@@ -30,7 +30,11 @@ export interface UpdateAPI {
   install(): UpdateStatus;
 }
 export interface Manager {
-  installBundle(spec: string, options?: { enabled?: boolean; requestId?: string }): Promise<{ application: string; version?: string }>;
+  installBundle(spec: string, options?: { enabled?: boolean; requestId?: string }): Promise<{
+    application: string; version?: string;
+    error?: { code: string };
+    packageResult?: { output: string; kind?: string };
+  }>;
 }
 interface Asset { id?: number; name: string; size: number; digest?: string }
 interface Candidate { version: string; asset: Asset; checksum: Asset | undefined; source: 'api' | 'public' }
@@ -38,6 +42,16 @@ type InstallSource = 'manual' | 'automatic';
 interface InstallTask { source: InstallSource; abort: AbortController; submitted: boolean }
 class UpdateFailure extends Error {}
 const failure = (code: string): never => { throw new UpdateFailure(code); };
+
+function hostInstallFailure(result: Awaited<ReturnType<Manager['installBundle']>>): string {
+  const output = result.packageResult?.output ?? '';
+  if (/\bERR_PNPM_UNEXPECTED_STORE\b/.test(output)) return 'host-store-mismatch';
+  if (/\bERR_PNPM_GIT_FETCH_FAILED\b/.test(output)) return 'host-dependency-network';
+  const kind = result.packageResult?.kind;
+  if (kind && ['network', 'timeout', 'permission', 'disk-full', 'pnpm-missing', 'build-blocked', 'integrity'].includes(kind)) return `host-${kind}`;
+  if (result.error?.code === 'already-installed') return 'host-already-installed';
+  return 'host-install-failed';
+}
 
 export function releaseCandidate(value: unknown, current: string): Candidate | null {
   const release = value as { draft?: boolean; prerelease?: boolean; tag_name?: string; assets?: Asset[] };
@@ -364,7 +378,8 @@ export class Updater implements UpdateAPI {
       // an installation already submitted, including plugin disposal during HMR.
       task.submitted = true;
       const result = await this.options.manager.installBundle(file, { enabled: true, requestId: `${manifest.name}-${randomUUID()}` });
-      if (!['applied', 'restart-required'].includes(result.application) || result.version !== candidate.version) return failure('host-install-failed');
+      if (!['applied', 'restart-required'].includes(result.application)) return failure(hostInstallFailure(result));
+      if (result.version !== candidate.version) return failure('host-version-mismatch');
       const finished: UpdateStatus = {
         ...this.state,
         phase: result.application === 'restart-required' ? 'restart-required' : 'current',

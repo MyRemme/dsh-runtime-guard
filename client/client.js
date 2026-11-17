@@ -670,7 +670,28 @@ window.__ModuleLoader__.load({
         const value = state.updates;
         const newerThanStable = value?.currentVersion && value?.latestVersion && compareVer(value.currentVersion, value.latestVersion) > 0;
         const phases = { unavailable: '此宿主不支持在线更新', idle: '尚未检查', checking: '正在检查', current: '已是最新正式版', available: '有新版本', 'waiting-idle': '等待所有对话空闲后安装', downloading: '正在下载并校验', installing: '正在交给 DSH 安装', 'restart-required': '已安装，需重启 DSH 生效', error: '更新未完成' };
-        const errors = { 'github-auth-or-release': '公开 Release 暂不可访问或尚未发布，请稍后重试。', 'github-denied': 'GitHub 暂时限制了访问，且公开更新清单暂不可用，请稍后重试。', 'invalid-release': 'Release 更新信息格式不正确，未安装。', 'missing-artifact': 'Release 缺少安装包或校验值。', 'checksum-failed': '安装包 SHA-256 校验失败，未安装。', 'incompatible-host': '新版本不支持当前 DSH 或 Node.js，未安装。', 'host-install-failed': 'DSH 未确认安装成功，请检查原生插件页。', 'storage-failed': '无法保存更新设置，自动更新未开启。', 'install-scripts': '安装包声明安装脚本，已拒绝自动安装。' };
+        const errors = {
+          'github-auth-or-release': '公开 Release 暂不可访问或尚未发布，请稍后重试。',
+          'github-denied': 'GitHub 暂时限制了访问，且公开更新清单暂不可用，请稍后重试。',
+          'invalid-release': 'Release 更新信息格式不正确，未安装。',
+          'missing-artifact': 'Release 缺少安装包或校验值。',
+          'checksum-failed': '安装包 SHA-256 校验失败，未安装。',
+          'incompatible-host': '新版本不支持当前 DSH 或 Node.js，未安装。',
+          'host-store-mismatch': 'DSH 的 pnpm 仓库路径与现有依赖不一致。请在当前 profile 的 pnpm-workspace.yaml 中将 storeDir 指向原仓库根目录，再检查更新重试；具体路径见 DSH 原生插件页的安装日志。',
+          'host-dependency-network': '安装时另一个 Git 依赖下载失败。请检查 DSH 的 Git 网络或代理配置，再检查更新重试。',
+          'host-network': 'DSH 安装依赖时网络连接失败，请检查网络或代理后重试。',
+          'host-timeout': 'DSH 安装依赖超时，请检查网络后重试。',
+          'host-permission': 'DSH 没有写入依赖目录的权限，请检查文件权限或占用后重试。',
+          'host-disk-full': '安装所在磁盘空间不足，请释放空间后重试。',
+          'host-pnpm-missing': 'DSH 未找到 pnpm，请修复 DSH 自带运行环境后重试。',
+          'host-build-blocked': 'DSH 安装的依赖需要构建批准，请查看原生插件页的安装日志。',
+          'host-integrity': 'DSH 安装依赖时完整性校验失败，请查看原生插件页的安装日志。',
+          'host-already-installed': 'DSH 拒绝重复安装，请完全退出 DSH 后通过原生插件安装命令升级。',
+          'host-version-mismatch': 'DSH 返回的安装版本与目标版本不一致，请在原生插件页确认实际版本。',
+          'host-install-failed': 'DSH 未确认安装成功，请查看原生插件页的安装日志。',
+          'storage-failed': '无法保存更新设置，自动更新未开启。',
+          'install-scripts': '安装包声明安装脚本，已拒绝自动安装。',
+        };
         const busy = state.updateBusy || ['checking', 'downloading', 'installing', 'restart-required'].includes(value?.phase);
         return h('section', { className: 'rg26-section', 'aria-label': '插件更新' },
           h('div', { className: 'rg26-about' }, icon(UI.IconShieldOutlineRegular, 36), h('div', null, h('strong', null, 'DSH 运行时护栏'), h('small', null, `版本 ${value?.currentVersion || '读取中'}`))),

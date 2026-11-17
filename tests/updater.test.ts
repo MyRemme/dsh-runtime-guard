@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { create } from 'tar';
-import { manifestCandidate, releaseCandidate, Updater, validateArchive } from '../src/updater.js';
+import { manifestCandidate, releaseCandidate, Updater, validateArchive, type Manager } from '../src/updater.js';
 import { gtVersion, satisfiesRange, validVersion } from '../src/semver.js';
 
 vi.mock('node:fs/promises', async importOriginal => {
@@ -38,7 +38,7 @@ async function setup(options: { busy?: boolean; checksum?: boolean; fail?: boole
   const transport = vi.fn<typeof fetch>(async (url) => String(url).endsWith('/latest')
     ? new Response(JSON.stringify(data.release)) : new Response(new Uint8Array(data.buffer)));
   const publicTransport = vi.fn<typeof fetch>(async () => new Response(null, { status: 404 }));
-  const installBundle = vi.fn(async (_spec: string) => ({ application: options.fail ? 'failed' : 'restart-required', version: '0.1.8' }));
+  const installBundle = vi.fn<Manager['installBundle']>(async () => ({ application: options.fail ? 'failed' : 'restart-required', version: '0.1.8' }));
   const updater = new Updater({ directory: data.directory, hostVersion: '0.2.1-rc.2', manager: { installBundle }, idle: options.idleProbe ?? (() => idle),
     fetch: (url, options) => String(url).endsWith('/stable.json') ? publicTransport(url, options) : transport(url, options), schedule: false, currentVersion: '0.1.7' });
   updaters.push(updater); await updater.start();
@@ -348,6 +348,30 @@ it('rejects checksum failure without invoking the host installer', async () => {
 it('reports a host refusal without claiming that the new version is active', async () => {
   const { updater } = await setup({ fail: true }); await updater.check(); updater.install(); await settled(updater);
   expect(updater.status()).toMatchObject({ phase: 'error', error: 'host-install-failed', currentVersion: '0.1.7' });
+});
+it.each([
+  ['[ERR_PNPM_UNEXPECTED_STORE] Unexpected store location', 'unknown', 'host-store-mismatch'],
+  ['[ERR_PNPM_GIT_FETCH_FAILED] Failed to fetch dependency', 'unknown', 'host-dependency-network'],
+  ['registry connection failed', 'network', 'host-network'],
+  ['process timed out', 'timeout', 'host-timeout'],
+  ['access denied', 'permission', 'host-permission'],
+  ['no space left', 'disk-full', 'host-disk-full'],
+  ['unrecognized failure', 'unknown', 'host-install-failed'],
+])('preserves an actionable host failure without exposing logs: %s', async (output, kind, expected) => {
+  const { updater, installBundle } = await setup();
+  installBundle.mockResolvedValueOnce({ application: 'failed', error: { code: 'pnpm-failed' },
+    packageResult: { output: output + '\nprivate-path fixture-token', kind } });
+  await updater.check(); updater.install(); await settled(updater);
+  expect(updater.status()).toMatchObject({ phase: 'error', error: expected, currentVersion: '0.1.7', latestVersion: '0.1.8' });
+  expect(JSON.stringify(updater.status())).not.toMatch(/private-path|fixture-token/);
+  await updater.check(); updater.install(); await settled(updater);
+  expect(updater.status()).toMatchObject({ phase: 'restart-required', error: null });
+});
+it('does not report success when the host returns a different installed version', async () => {
+  const { updater, installBundle } = await setup();
+  installBundle.mockResolvedValueOnce({ application: 'applied', version: '0.1.7' });
+  await updater.check(); updater.install(); await settled(updater);
+  expect(updater.status()).toMatchObject({ phase: 'error', error: 'host-version-mismatch', currentVersion: '0.1.7' });
 });
 it('checks idle again after the download before changing the installation', async () => {
   const { updater, idle, transport, buffer, installBundle } = await setup(); await updater.check();

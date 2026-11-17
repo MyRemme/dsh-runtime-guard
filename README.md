@@ -105,6 +105,15 @@ npm pack --ignore-scripts
 
 `npm run check` 执行类型检查、自动化测试和构建，测试使用合成模型输出。`npm pack` 生成可供 DSH 安装的 `.tgz`。
 
+## 升级失败排查
+
+更新分为检查版本、下载校验、交给 DSH 安装依赖三个阶段。下载成功不代表安装成功；安装失败后仍显示实际运行的旧版版本号。修复原因后点击「检查更新」再重试。
+
+- `ERR_PNPM_UNEXPECTED_STORE`：DSH 当前 pnpm 仓库与既有依赖的仓库不同。完全退出 DSH，读取当前 profile 的 `node_modules/.modules.yaml` 中的 `storeDir`，将其仓库根目录写入同一 profile 的 `pnpm-workspace.yaml` 的 `storeDir`。例如已有仓库为 `C:\.pnpm-store\v11`，配置为 `storeDir: C:/.pnpm-store`，保留 YAML 中所有其他配置。pnpm 新版本使用 workspace 配置，不能依赖项目 `.npmrc` 生效。
+- `ERR_PNPM_GIT_FETCH_FAILED`：DSH 安装时可能解析 profile 内其他已装插件的 Git 依赖。检查该依赖的网络和 Git 代理，再重试安装。
+
+具体错误见 DSH 原生插件页的安装日志。无需先卸载运行时护栏，也不要删除整个 `node_modules` 或插件设置目录来重试。
+
 ## 维护与发布（仅限维护者）
 
 - `npm run test:package`（调用 [test-package.mjs](scripts/test-package.mjs)）：重新打包并验证 `.tgz` 在本地缓存的 35 个真实 DSH 宿主版本中均可加载运行，同时刷新兼容矩阵结果；普通用户无需运行。
