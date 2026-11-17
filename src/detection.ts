@@ -2,6 +2,13 @@ import type { Settings } from './config.js';
 
 export interface RepeatEvidence { method?: 'periodic' | 'phrase'; uncertainty?: 'changing-numbered-units' | 'changing-units'; period: number; repeats: number; coverage: number; novelty: number; score: number; confirmed: boolean; chars: number }
 
+const LETTER_RE = /\p{L}/u;
+const LETTERS_RE = /\p{L}/gu;
+const SINGLE_LETTER_RE = /^\p{L}$/u;
+const NUMBER_RE = /\p{N}/u;
+const ALNUM_RE = /[\p{L}\p{N}]/u;
+const FENCE_LINE_RE = /^ {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)\r?$/m;
+
 /** Repeated short units can alternate with changing remarks, defeating exact periods. */
 export function phraseRepetition(text: string, minRepeats: number, maxUnitLength = 24) {
   // Keep decimals/thousands (1,000), paths, extensions, versions and timestamps (12:30) intact.
@@ -11,13 +18,13 @@ export function phraseRepetition(text: string, minRepeats: number, maxUnitLength
   })).filter(unit => unit.value.length > 0);
   const counts = new Map<string, number>();
   for (const { value } of units) {
-    if (value.length <= maxUnitLength && /\p{L}/u.test(value)) counts.set(value, (counts.get(value) ?? 0) + 1);
+    if (value.length <= maxUnitLength && LETTER_RE.test(value)) counts.set(value, (counts.get(value) ?? 0) + 1);
   }
   const common = [...counts].filter(([, count]) => count >= minRepeats).sort((a, b) => b[1] * b[0].length - a[1] * a[0].length).slice(0, 4);
   const values = new Set(common.map(([value]) => value));
-  const letters = new Set(common.map(([value]) => value).join('').match(/\p{L}/gu));
-  const singleLetter = letters.size === 1 && common.every(([value]) => /^\p{L}$/u.test(value));
-  if (!letters.size || letters.size < 2 && !singleLetter) return;
+  const letters = new Set(common.map(([value]) => value).join('').match(LETTERS_RE));
+  const singleLetter = letters.size === 1 && common.every(([value]) => SINGLE_LETTER_RE.test(value));
+  if (!letters.size || (letters.size < 2 && !singleLetter)) return;
   const repeated = units.filter(unit => values.has(unit.value));
   const chars = units.reduce((sum, unit) => sum + unit.value.replace(/\s/gu, '').length, 0);
   const repeatedChars = repeated.reduce((sum, unit) => sum + unit.value.replace(/\s/gu, '').length, 0);
@@ -27,16 +34,12 @@ export function phraseRepetition(text: string, minRepeats: number, maxUnitLength
   const minPerThird = maxUnitLength > 24 ? 2 : 3;
   const distributed = [0, 1, 2].every(third => repeated.filter(unit => unit.start >= text.length * third / 3 && unit.start < text.length * (third + 1) / 3).length >= minPerThird);
   if (repeated.length < minUnits || repeatedChars < (maxUnitLength > 24 ? 240 : 80) || repeatedChars / Math.max(chars, 1) < 0.35 || coverage < 0.7 || !distributed) return;
-  const numbered = units.filter(unit => !values.has(unit.value) && /\p{N}/u.test(unit.value));
+  const numbered = units.filter(unit => !values.has(unit.value) && NUMBER_RE.test(unit.value));
   const distinctNumbered = new Set(numbered.map(unit => unit.value)).size;
   const highRepeatCharShare = repeatedChars / Math.max(chars, 1) >= 0.88;
   const changingNumberedUnits = !highRepeatCharShare && (distinctNumbered >= 3 && numbered.length / units.length >= 0.15
     || distinctNumbered >= 6 && numbered.length / units.length >= 0.1 && distinctNumbered / numbered.length >= 0.7);
-  // Fixed conclusions can dominate a checklist whose object names keep changing.
-  // Judge the non-repeated units separately: overlapping windows hide their
-  // novelty among common phrases. Require enough distinct units to exclude
-  // clipped window edges and a rotating set of additional repeated phrases.
-  const changing = units.filter(unit => !values.has(unit.value) && /[\p{L}\p{N}]/u.test(unit.value));
+  const changing = units.filter(unit => !values.has(unit.value) && ALNUM_RE.test(unit.value));
   const distinct = new Set(changing.map(unit => unit.value)).size;
   const changingUnits = !highRepeatCharShare && (distinct >= 3 && changing.length / units.length >= 0.15 && distinct / changing.length >= 0.5
     || distinct >= 6 && changing.length / units.length >= 0.1 && distinct / changing.length >= 0.7);
@@ -48,10 +51,8 @@ export function periodicSuffix(text: string, minPeriod: number, maxPeriod: numbe
   let best = { period: 0, repeats: 0, coverage: 0 };
   const end = text.length, limit = Math.min(maxPeriod, Math.floor(end / minRepeats));
   if (limit < minPeriod) return best;
-  // A suffix contains two distinct letters exactly when it includes the last
-  // letter before the final run of identical letters. Scan Unicode only once.
   let lastLetter = '', lastIndex = -1, distinctIndex = -1;
-  for (const match of text.slice(end - limit).matchAll(/\p{L}/gu)) {
+  for (const match of text.slice(end - limit).matchAll(LETTERS_RE)) {
     if (match[0] !== lastLetter) distinctIndex = lastIndex;
     lastLetter = match[0]; lastIndex = match.index;
   }
@@ -67,17 +68,15 @@ export function periodicSuffix(text: string, minPeriod: number, maxPeriod: numbe
 }
 export function grams(text: string): Set<string> {
   const set = new Set<string>();
-  // Include every offset so odd-sized stream deltas cannot make an unchanged
-  // periodic window appear wholly novel by switching the sampling parity.
   for (let i = 0; i + 4 <= text.length; i++) set.add(text.slice(i, i + 4));
   return set;
 }
 export function codeLike(text: string): boolean {
-  return /^ {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)\r?$/m.test(text) || ((text.match(/[{};=<>]/g)?.length ?? 0) / Math.max(text.length, 1) > 0.08);
+  return FENCE_LINE_RE.test(text) || ((text.match(/[{};=<>]/g)?.length ?? 0) / Math.max(text.length, 1) > 0.08);
 }
 function canRunReasoningPhrase(tail: string, minPeriod: number, maxPeriod: number, minRepeats: number): boolean {
   if (!codeLike(tail)) return true;
-  if (/^ {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)\r?$/m.test(tail) || /[{}]/.test(tail)) return false;
+  if (FENCE_LINE_RE.test(tail) || /[{}]/.test(tail)) return false;
   return periodicSuffix(tail, minPeriod, maxPeriod, minRepeats).coverage < 0.85;
 }
 function fnv1aHash(text: string): number {
@@ -139,6 +138,14 @@ export class StepLoopTracker {
     };
   }
 }
+
+function gramNovelty(current: Set<string>, previous: Set<string>): number {
+  if (!previous.size) return 1;
+  let fresh = 0;
+  for (const gram of current) if (!previous.has(gram)) fresh++;
+  return fresh / Math.max(current.size, 1);
+}
+
 export class RepeatDetector {
   private buffer = '';
   private total = 0;
@@ -149,33 +156,41 @@ export class RepeatDetector {
   private lastConfirmedPeriod = 0;
   private phraseConsecutive = 0;
   private checks = 0;
+  private readonly minChars: number;
+  private readonly checkEveryChars: number;
   stats() { return { chars: this.total, checks: this.checks }; }
-  constructor(private readonly config: Settings, private readonly reasoning = false) {}
+  constructor(private readonly config: Settings, private readonly reasoning = false) {
+    this.minChars = reasoning ? Math.min(512, config.minChars) : config.minChars;
+    this.checkEveryChars = reasoning ? Math.min(128, config.checkEveryChars) : config.checkEveryChars;
+  }
   push(text: string): RepeatEvidence | undefined {
     this.total += text.length;
     this.sinceCheck += text.length;
     this.buffer = (this.buffer + text).slice(-this.config.windowChars);
-    if (this.total < (this.reasoning ? Math.min(512, this.config.minChars) : this.config.minChars) || this.sinceCheck < (this.reasoning ? Math.min(128, this.config.checkEveryChars) : this.config.checkEveryChars)) return;
+    if (this.total < this.minChars || this.sinceCheck < this.checkEveryChars) return;
     this.sinceCheck = 0;
     this.checks++;
-    const current = grams(this.buffer.slice(-1024));
-    let fresh = 0; for (const gram of current) if (!this.previous.has(gram)) fresh++;
-    const novelty = this.previous.size ? fresh / Math.max(current.size, 1) : 1;
+    const tail1024 = this.buffer.slice(-1024);
+    const current = grams(tail1024);
+    const novelty = gramNovelty(current, this.previous);
     this.previous = current;
-    const phraseGrams = this.reasoning ? grams(this.buffer.slice(-512)) : new Set<string>();
-    let phraseFresh = 0; for (const gram of phraseGrams) if (!this.previousPhrase.has(gram)) phraseFresh++;
-    const phraseNovelty = this.previousPhrase.size ? phraseFresh / Math.max(phraseGrams.size, 1) : 1;
-    this.previousPhrase = phraseGrams;
+
+    let phraseNovelty = 1;
+    if (this.reasoning) {
+      const phraseGrams = grams(this.buffer.slice(-512));
+      phraseNovelty = gramNovelty(phraseGrams, this.previousPhrase);
+      this.previousPhrase = phraseGrams;
+    }
+
     const repeat = this.total >= this.config.minChars ? periodicSuffix(this.buffer, this.config.minPeriod, this.config.maxPeriod, this.config.minRepeats) : { period: 0, repeats: 0, coverage: 0 };
-    const fenced = /^ {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)\r?$/m.test(this.buffer);
+    const fenced = FENCE_LINE_RE.test(this.buffer);
     const strong = repeat.coverage >= 0.85 && (!codeLike(this.buffer) || (this.reasoning && !fenced && repeat.coverage >= 0.9 && repeat.repeats >= 12));
-    // Confirmation requires fresh characters on distinct checks, never repeated checks of one buffer.
     const compatiblePeriod = this.lastConfirmedPeriod === 0 || repeat.period % this.lastConfirmedPeriod === 0 || this.lastConfirmedPeriod % Math.max(repeat.period, 1) === 0;
     const stable = strong && novelty <= 0.15;
     this.consecutive = stable && compatiblePeriod ? this.consecutive + 1 : stable ? 1 : 0;
     this.lastConfirmedPeriod = stable ? repeat.period : 0;
+
     const tail512 = this.buffer.slice(-512);
-    const tail1024 = this.buffer.slice(-1024);
     const phrase = this.reasoning && canRunReasoningPhrase(tail512, this.config.minPeriod, this.config.maxPeriod, this.config.minRepeats)
       ? phraseRepetition(tail512, this.config.minRepeats)
         ?? (this.total >= this.config.minChars && !strong && canRunReasoningPhrase(tail1024, this.config.minPeriod, this.config.maxPeriod, this.config.minRepeats)
@@ -183,8 +198,6 @@ export class RepeatDetector {
           : undefined)
       : undefined;
     const uncertainty = phrase?.changingNumberedUnits ? 'changing-numbered-units' : phrase?.changingUnits ? 'changing-units' : undefined;
-    // Single-letter sentences need near-total coverage and stricter novelty;
-    // the general periodic detector still excludes single-letter/data spam.
     const phraseStable = !!phrase && !uncertainty && phrase.coverage >= (phrase.singleLetter ? 0.9 : 0.75) && phraseNovelty <= (phrase.singleLetter ? 0.15 : 0.45);
     this.phraseConsecutive = phraseStable ? this.phraseConsecutive + 1 : 0;
     if (phrase && (uncertainty || !strong || this.phraseConsecutive >= this.config.confirmations)) return {

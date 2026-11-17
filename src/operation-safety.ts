@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { PROFILE_DIR, readProfileJsonSync, writeProfileFile } from './profile-file.js';
+import { ProfileJsonStore } from './profile-file.js';
 import { sessionKey } from './metrics.js';
 import type { HostContext, PreToolDecision, ToolExecution } from './types.js';
 
@@ -50,11 +50,22 @@ const reasons: Record<Rule, string> = {
   'configuration-changed': '等待审批期间权限或防护设置发生变化，请重新提交调用。', cancelled: '操作已取消。',
 };
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const isValidTextArg = (value: unknown, max = 4096): value is string =>
+  typeof value === 'string' && !!value.trim() && !value.includes('\0') && value.length <= max;
 const stripExtendedPrefix = (value: string): string => value.replace(/^\\\\\?\\([A-Za-z]:\\)/, '$1');
 const foldPath = (value: string): string => {
   const normalized = stripExtendedPrefix(resolve(value));
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 };
+
+/** Shared pattern for unresolved home/env/UNC/file-URI/drive-relative paths. */
+const SPECIAL_PATH_PREFIX_RE = /^(?:~(?:$|[/\\])|%[^%]+%|\\{2}|\/\/|file:|\$(?:env:|home\b|\{|[A-Za-z_][A-Za-z0-9_]*))/i;
+
+const READ_PS_CMDS = 'get-content|get-item|get-childitem|get-location|get-filehash|get-process|test-path|select-string|select-object|measure-object|compare-object|write-output|write-host|echo|pwd';
+const NESTED_SHELL_WORDS = 'invoke-expression|iex|start-process|saps|cmd(?:\\.exe)?|powershell(?:\\.exe)?|pwsh(?:\\.exe)?|bash|sh|wscript(?:\\.exe)?|cscript(?:\\.exe)?|mshta(?:\\.exe)?';
+const READ_PIPE_RE = new RegExp(`^(?:${READ_PS_CMDS}|ls|cat|head|tail|stat|wc|rg|grep)(?:\\s|$)`, 'i');
+const STRICT_READ_RE = /^(?:get-content|get-item|get-childitem|get-location|get-filehash|test-path|select-string|pwd)(?:\s|$)/i;
+const ORDINARY_PS_RE = new RegExp(`^(?:${READ_PS_CMDS}|set-content|add-content|out-file|new-item|copy-item|move-item|rename-item)(?:\\s|$)`, 'i');
 
 /** Resolve symlinks/junctions when present, or the deepest existing ancestor for new paths. */
 function canonicalizeSync(target: string): string {
@@ -81,8 +92,7 @@ const isRelativeInside = (rel: string): boolean =>
 
 export function isPathUnderSync(targetPath: string, workspaceRoot: string, baseDir: string = workspaceRoot): boolean {
   if (!targetPath || targetPath.includes('\0') || workspaceRoot.includes('\0')) return false;
-  // Unresolved user/home/env/UNC/file-URI/drive-relative paths or POSIX roots on Windows cannot be pinned inside workspace.
-  if (/^(?:~(?:$|[/\\])|%[^%]+%|\\{2}|\/\/|file:|\$(?:env:|home\b|\{|[A-Za-z_][A-Za-z0-9_]*)|[A-Za-z]:(?![/\\]))/i.test(targetPath)) return false;
+  if (SPECIAL_PATH_PREFIX_RE.test(targetPath) || /^[A-Za-z]:(?![/\\])/.test(targetPath)) return false;
   const winContext = process.platform === 'win32' || /^[A-Za-z]:[/\\]/.test(workspaceRoot);
   if (winContext && (targetPath.startsWith('/') || targetPath.replace(/^[A-Za-z]:/, '').includes(':'))) return false;
   const resolvedBase = canonicalizeSync(resolve(workspaceRoot, baseDir));
@@ -123,15 +133,9 @@ function hasExpandableDollar(command: string): boolean {
   return false;
 }
 
-function stripSafeQuotesForCommandScan(command: string): string {
-  // Mask literal strings that cannot invoke subshells while keeping double-quoted $() expansions visible.
-  return command.replace(/'[^']*'|"([^"]*)"/g, (whole, dbl: string | undefined) => (dbl?.includes('$') ? whole : ' '));
-}
-
 function extractShellPathTokens(command: string): string[] {
   const tokens: string[] = [];
   const rawTokens: string[] = [];
-  // PowerShell also permits quotes inside a token: -LiteralPath:"C:\\some folder\\file".
   let token = '', quote = '';
   const flush = () => { if (token) rawTokens.push(token); token = ''; };
   for (const char of command) {
@@ -147,7 +151,8 @@ function extractShellPathTokens(command: string): string[] {
     const boundPath = /^(?:--?[A-Za-z][A-Za-z0-9_-]*[:=]|[A-Za-z_][A-Za-z0-9_]*=)(.+)$/.exec(cleaned);
     if (boundPath) cleaned = boundPath[1]!.replace(/^['"]|['"]$/g, '');
     if (/^-[A-Za-z]/.test(cleaned)) continue;
-    const looksLikePath = /^(?:~(?:$|[/\\])|[A-Za-z]:|\\{2}|\/\/|file:|\.\.(?:[/\\]|$)|\.[/\\]|%[^%]+%|\$(?:env:|home\b|\{|[A-Za-z_]))/i.test(cleaned)
+    const looksLikePath = SPECIAL_PATH_PREFIX_RE.test(cleaned)
+      || /^(?:[A-Za-z]:|\.\.(?:[/\\]|$)|\.[/\\])/i.test(cleaned)
       || (cleaned.startsWith('/') && cleaned.length > 1 && !/^\/[A-Za-z0-9]{1,8}$/.test(cleaned))
       || /\.[A-Za-z0-9]{1,12}:[^\s\\/:]/.test(cleaned)
       || (!/\s/.test(cleaned) && /[/\\]/.test(cleaned));
@@ -161,7 +166,7 @@ function resolveWorkdir(args: Record<string, unknown>, workspaceRoot: string): {
   if (supplied.length > 1) return { ok: false, rule: 'invalid-arguments' };
   if (supplied.length === 0 || args[supplied[0]!] === undefined) return { ok: true, workdir: workspaceRoot };
   const raw = args[supplied[0]!];
-  if (typeof raw !== 'string' || !raw.trim() || raw.includes('\0') || raw.length > 4096) return { ok: false, rule: 'invalid-arguments' };
+  if (!isValidTextArg(raw)) return { ok: false, rule: 'invalid-arguments' };
   const target = raw.trim();
   if (!isPathUnderSync(target, workspaceRoot)) return { ok: false, rule: 'outside-workspace' };
   return { ok: true, workdir: resolve(workspaceRoot, target) };
@@ -187,9 +192,6 @@ function extractPatchInfo(patch: string): { paths: string[]; destructive: boolea
   }
   return { paths, destructive };
 }
-
-const isValidTextArg = (value: unknown, max = 4096): value is string =>
-  typeof value === 'string' && !!value.trim() && !value.includes('\0') && value.length <= max;
 
 function extractWritePaths(name: string, args: Record<string, unknown>): { ok: true; paths: string[]; destructive: boolean } | { ok: false } {
   const paths: string[] = [];
@@ -234,13 +236,11 @@ function assessOpsFile(name: string, args: Record<string, unknown>, policy: Poli
   const dir = resolveWorkdir(args, policy.workspaceRoot);
   if (!dir.ok && dir.rule === 'invalid-arguments') return { kind: 'deny', rule: 'invalid-arguments' };
   const baseDir = dir.ok ? dir.workdir : policy.workspaceRoot;
-  const checkPath = (value: unknown): string | null => (isValidTextArg(value) ? value.trim() : null);
   const paths: string[] = [];
   if (name === 'ops_replace') {
     if (Object.hasOwn(args, 'path') && args.path !== undefined) {
-      const target = checkPath(args.path);
-      if (!target) return { kind: 'deny', rule: 'invalid-arguments' };
-      paths.push(target);
+      if (!isValidTextArg(args.path)) return { kind: 'deny', rule: 'invalid-arguments' };
+      paths.push(args.path.trim());
     } else {
       paths.push('.');
     }
@@ -256,13 +256,11 @@ function assessOpsFile(name: string, args: Record<string, unknown>, policy: Poli
       }
     }
   } else {
-    const source = checkPath(args.path);
-    if (!source) return { kind: 'deny', rule: 'invalid-arguments' };
-    paths.push(source);
+    if (!isValidTextArg(args.path)) return { kind: 'deny', rule: 'invalid-arguments' };
+    paths.push(args.path.trim());
     if (name === 'ops_copy' || name === 'ops_move') {
-      const dest = checkPath(args.to);
-      if (!dest) return { kind: 'deny', rule: 'invalid-arguments' };
-      paths.push(dest);
+      if (!isValidTextArg(args.to)) return { kind: 'deny', rule: 'invalid-arguments' };
+      paths.push(args.to.trim());
     }
   }
   if (policy.mode === 'read-only') return { kind: 'deny', rule: 'read-only-write' };
@@ -294,11 +292,9 @@ function assessOpsBatch(args: Record<string, unknown>, policy: Policy): Assessme
   if (Object.hasOwn(args, 'operations') && args.operations !== undefined) {
     if (!Array.isArray(args.operations)) return { kind: 'deny', rule: 'invalid-arguments' };
     for (const item of args.operations) {
-      if (!isRecord(item) || typeof item.op !== 'string' || !['copy', 'move', 'remove'].includes(item.op)) {
-        return { kind: 'deny', rule: 'invalid-arguments' };
-      }
-      if (!isValidTextArg(item.path)) return { kind: 'deny', rule: 'invalid-arguments' };
-      if (Object.hasOwn(item, 'to') && item.to !== undefined && !isValidTextArg(item.to)) {
+      if (!isRecord(item) || typeof item.op !== 'string' || !['copy', 'move', 'remove'].includes(item.op)
+        || !isValidTextArg(item.path)
+        || (Object.hasOwn(item, 'to') && item.to !== undefined && !isValidTextArg(item.to))) {
         return { kind: 'deny', rule: 'invalid-arguments' };
       }
       if (item.op === 'remove') hasRemove = true;
@@ -324,9 +320,7 @@ function assessOpsBatch(args: Record<string, unknown>, policy: Policy): Assessme
 
 function assessRunCode(args: Record<string, unknown>, policy: Policy): Assessment {
   const rawCode = Object.hasOwn(args, 'code') ? args.code : Object.hasOwn(args, 'script') ? args.script : undefined;
-  if (typeof rawCode !== 'string' || !rawCode.trim() || rawCode.length > 131072 || rawCode.includes('\0')) {
-    return { kind: 'deny', rule: 'invalid-arguments' };
-  }
+  if (!isValidTextArg(rawCode, 131072)) return { kind: 'deny', rule: 'invalid-arguments' };
   const dir = resolveWorkdir(args, policy.workspaceRoot);
   if (!dir.ok && dir.rule === 'invalid-arguments') return { kind: 'deny', rule: 'invalid-arguments' };
   const lowered = rawCode.toLowerCase();
@@ -351,8 +345,7 @@ function assessRunCode(args: Record<string, unknown>, policy: Policy): Assessmen
 
 /** Conservative recognition, not a shell parser or an OS sandbox. Inspect nested literal payloads too. */
 export function assessCommand(command: string, mode: Mode, workdir?: string, workspaceRoot?: string): Assessment {
-  if (!command.trim() || command.length > 65536 || command.includes('\0')) return { kind: 'deny', rule: 'invalid-arguments' };
-  // A valid host-resolved full-access choice delegates to native tool/OS policy.
+  if (!isValidTextArg(command, 65536)) return { kind: 'deny', rule: 'invalid-arguments' };
   if (mode === 'danger-full-access') return { kind: 'allow' };
   const text = command.replace(/`\r?\n/g, '').replace(/[`^]/g, '').toLowerCase();
   if (/\brunas(?:\.exe)?\b|\bshellexecute\b|elevation:administrator/.test(text)
@@ -366,11 +359,7 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
   const modifies = destructive || commandWord('(?:set-content|add-content|out-file|new-item|ni|copy-item|cp|copy|move-item|mv|move|rename-item|ren|mkdir|md|touch|tee|set-item|set-itemproperty|remove-itemproperty|new-itemproperty|clear-itemproperty|set-acl|set-service|stop-service|restart-service|set-ciminstance|invoke-cimmethod)')
     || /(?:^|[^<])>{1,2}|\bgit\s+(?:add|commit|checkout|switch|restore|merge|rebase|cherry-pick|revert|stash|pull|fetch|config)\b|\bgit\s+[\s\S]*--output(?:=|\s)/.test(text);
   const literalRead = !modifies && !/[`$;&<>(){}\r\n]/.test(command) && !/--(?:pre|ext-diff|textconv|output)\b/i.test(command)
-    && splitUnquotedPipes(command).every(part =>
-      /^(?:get-content|get-item|get-childitem|get-location|get-filehash|get-process|test-path|select-string|select-object|measure-object|compare-object|write-output|write-host|echo|pwd|ls|cat|head|tail|stat|wc|rg|grep)(?:\s|$)/i.test(part.trim())
-      || /^git\s+(?:status|diff|log|show|ls-files|ls-tree|rev-parse)(?:\s|$)/i.test(part.trim()));
-  // Native read tools already allow reads outside the workspace. File modes
-  // constrain modifications, not every path appearing in a read command.
+    && splitUnquotedPipes(command).every(part => READ_PIPE_RE.test(part.trim()) || /^git\s+(?:status|diff|log|show|ls-files|ls-tree|rev-parse)(?:\s|$)/i.test(part.trim()));
   if (literalRead) return { kind: 'allow' };
   const outside = workspaceRoot
     ? ((workdir && !isPathUnderSync(workdir, workspaceRoot))
@@ -379,33 +368,24 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
   if (mode === 'read-only') {
     if (modifies) return { kind: 'deny', rule: 'read-only-write' };
     if (outside) return { kind: 'ask', rule: 'outside-workspace' };
-    // Only a small literal cmdlet subset is admitted. Pipelines, native shells,
-    // expressions, script blocks and indirection remain outside this subset.
-    const read = /^(?:get-content|get-item|get-childitem|get-location|get-filehash|test-path|select-string|pwd)(?:\s|$)/i.test(command.trim());
-    return read && !/[`$;&|<>{}\r\n]/.test(command) ? { kind: 'allow' } : { kind: 'ask', rule: 'read-only-unknown' };
+    return STRICT_READ_RE.test(command.trim()) && !/[`$;&|<>{}\r\n]/.test(command) ? { kind: 'allow' } : { kind: 'ask', rule: 'read-only-unknown' };
   }
   if (destructive) return { kind: 'ask', rule: 'destructive' };
   if (outside) return { kind: 'ask', rule: 'outside-workspace' };
-  // Ordinary workspace build/test/script commands use the standing native
-  // workspace sandbox. They are not an escalation merely because they run code.
-  const unquoted = stripSafeQuotesForCommandScan(text);
-  const nestedShell = '(?:invoke-expression|iex|start-process|saps|cmd(?:\\.exe)?|powershell(?:\\.exe)?|pwsh(?:\\.exe)?|bash|sh|wscript(?:\\.exe)?|cscript(?:\\.exe)?|mshta(?:\\.exe)?)';
+  // Mask literal strings that cannot invoke subshells while keeping double-quoted $() expansions visible.
+  const unquoted = command.replace(/'[^']*'|"([^"]*)"/g, (whole, dbl: string | undefined) => (dbl?.includes('$') ? whole : ' '));
   const development = /^(?:npm(?:\.cmd)?|pnpm(?:\.cmd)?|npx(?:\.cmd)?|yarn(?:\.cmd)?|bun|node(?:\.exe)?|python(?:3|\.exe)?|py|pytest|tsc|vitest|jest|go|cargo|dotnet|cmake|make|git)(?:\s|$)/i.test(command.trim());
   if (development && !/[;&|`\r\n]/.test(command) && !/\$\(|[<>]\(/.test(command) && !hasExpandableDollar(command)
-    && !commandWordIn(unquoted, nestedShell)
+    && !commandWordIn(unquoted, `(?:${NESTED_SHELL_WORDS})`)
     && !/-(?:encodedcommand|enc|ec)\b|frombase64string|shell\.application/.test(unquoted)) return { kind: 'allow' };
-  if (commandWord('(?:invoke-expression|iex|start-process|saps|cmd(?:\\.exe)?|powershell(?:\\.exe)?|pwsh(?:\\.exe)?|bash|sh|wscript(?:\\.exe)?|cscript(?:\\.exe)?|mshta(?:\\.exe)?|python(?:3|\\.exe)?|node(?:\\.exe)?)')
+  if (commandWord(`(?:${NESTED_SHELL_WORDS}|python(?:3|\\.exe)?|node(?:\\.exe)?)`)
     || /-(?:encodedcommand|enc|ec|e)\b|frombase64string|shell\.application|(?:^|[\s;])(?:&|\.)\s|\$\(|\.(?:ps1|bat|cmd|vbs|js|py)(?:\s|['"]|$)/.test(text)) return { kind: 'ask', rule: 'opaque-execution' };
-  // Native executables and shell constructs outside the small understood set
-  // require review, including absolute executable paths and custom scripts.
-  const ordinary = /^(?:get-content|get-item|get-childitem|get-location|get-filehash|get-process|test-path|select-string|select-object|measure-object|compare-object|write-output|write-host|echo|pwd|set-content|add-content|out-file|new-item|copy-item|move-item|rename-item)(?:\s|$)/i.test(command.trim());
-  return ordinary && !/[;&|`(){}\r\n]/.test(command) && !hasExpandableDollar(command) && !/\.(?:ps1|bat|cmd|exe)\b/i.test(command)
+  return ORDINARY_PS_RE.test(command.trim()) && !/[;&|`(){}\r\n]/.test(command) && !hasExpandableDollar(command) && !/\.(?:ps1|bat|cmd|exe)\b/i.test(command)
     ? { kind: 'allow' } : { kind: 'ask', rule: 'opaque-execution' };
 }
 
 export class OperationSafety {
-  private enabled: boolean;
-  private settingsError = false;
+  private readonly store: ProfileJsonStore<boolean>;
   private disposed = false;
   private registered = false;
   private revision = 0;
@@ -413,24 +393,18 @@ export class OperationSafety {
   private readonly grants = new WeakMap<ToolExecution, { key: string; revision: number }>();
   private readonly decisions = new WeakSet<ToolExecution>();
   private readonly events: SafetyEvent[] = [];
-  private readonly file: string | undefined;
-  private saving: Promise<unknown> = Promise.resolve();
   private checked = 0; private denied = 0; private approvalRequests = 0; private approved = 0;
   private unregister: (() => void) | undefined;
   constructor(private readonly ctx: HostContext, enabled: boolean, private readonly hostVersion: string, profileDir?: string) {
-    this.enabled = enabled;
-    this.file = profileDir ? join(profileDir, PROFILE_DIR, 'operation-safety.json') : undefined;
-    if (profileDir) {
-      try {
-        const saved = readProfileJsonSync(profileDir, 4096, 'operation-safety.json');
-        if (saved !== undefined) {
-          if (!isRecord(saved) || Object.keys(saved).length !== 1 || typeof saved.enabled !== 'boolean') throw new Error('invalid settings');
-          this.enabled = saved.enabled;
-        }
-      } catch {
-        this.settingsError = true; this.enabled = true;
-      }
-    }
+    this.store = new ProfileJsonStore<boolean>({
+      directory: profileDir,
+      subpath: ['operation-safety.json'],
+      defaultValue: enabled,
+      parse: raw => (isRecord(raw) && typeof raw.enabled === 'boolean' ? raw.enabled : undefined),
+      serialize: value => JSON.stringify({ enabled: value }, null, 2) + '\n',
+      onLoadError: () => true,
+      disposedMessage: 'operation safety disposed',
+    });
     try {
       const tools = (ctx.get?.('tools', false) ?? ctx.tools) as HostContext['tools'];
       if (typeof tools?.guard === 'function') {
@@ -443,7 +417,7 @@ export class OperationSafety {
   }
   private service(name: string): unknown { return this.ctx.get?.(name, false); }
   private capabilityReason(): Rule | null {
-    if (this.settingsError) return 'settings-invalid';
+    if (this.store.loadError) return 'settings-invalid';
     if (!SAFETY_HOSTS.some(version => version === this.hostVersion)) return 'host-unverified';
     if (!this.registered) return 'guard-unavailable';
     try {
@@ -459,8 +433,6 @@ export class OperationSafety {
     return policy as unknown as Policy;
   }
   private assessment(exec: ToolExecution, policy: Policy): Assessment {
-    // Capability and policy failures are still denied by inspect(). This branch
-    // honors only an actual per-session full-access policy from the host.
     if (policy.mode === 'danger-full-access') return { kind: 'allow' };
     if (!isRecord(exec.arguments)) return { kind: 'deny', rule: 'invalid-arguments' };
     const args = exec.arguments;
@@ -468,8 +440,7 @@ export class OperationSafety {
       const dir = resolveWorkdir(args, policy.workspaceRoot);
       const supplied = ['command', 'cmd', 'script', 'code'].filter(key => Object.hasOwn(args, key));
       if (exec.name === 'ops_bash' && Object.hasOwn(args, 'script_path')) {
-        if (supplied.length || typeof args.script_path !== 'string' || !args.script_path.trim()
-          || args.script_path.length > 4096 || args.script_path.includes('\0') || (!dir.ok && dir.rule === 'invalid-arguments')) return { kind: 'deny', rule: 'invalid-arguments' };
+        if (supplied.length || !isValidTextArg(args.script_path) || (!dir.ok && dir.rule === 'invalid-arguments')) return { kind: 'deny', rule: 'invalid-arguments' };
         if (policy.mode === 'read-only') return { kind: 'ask', rule: 'read-only-unknown' };
         if (!dir.ok || !isPathUnderSync(args.script_path, policy.workspaceRoot, dir.workdir)) return { kind: 'ask', rule: 'outside-workspace' };
         return { kind: 'allow' };
@@ -486,12 +457,11 @@ export class OperationSafety {
       if (Object.hasOwn(args, 'command') && args.command !== undefined) {
         if (typeof args.command !== 'string') return { kind: 'deny', rule: 'invalid-arguments' };
         const cmdResult = assessCommand(args.command, policy.mode, dir.ok ? dir.workdir : (args.workdir ?? args.cwd) as string, policy.workspaceRoot);
-        if (cmdResult.kind === 'deny') return cmdResult;
-        if (cmdResult.kind === 'ask') return cmdResult;
+        if (cmdResult.kind !== 'allow') return cmdResult;
       }
       for (const key of ['type', 'shell'] as const) {
         if (Object.hasOwn(args, key) && args[key] !== undefined) {
-          if (typeof args[key] !== 'string' || !args[key].trim()) return { kind: 'deny', rule: 'invalid-arguments' };
+          if (!isValidTextArg(args[key])) return { kind: 'deny', rule: 'invalid-arguments' };
           if (!/^(?:pwsh|powershell|bash|sh|cmd)(?:\.exe)?$/i.test(args[key].trim())) return { kind: 'ask', rule: 'opaque-execution' };
         }
       }
@@ -511,12 +481,10 @@ export class OperationSafety {
       const result = payload.trim() ? assessCommand(payload.trimEnd(), policy.mode, workdir, policy.workspaceRoot) : { kind: 'allow' } as const;
       if (result.kind === 'deny') return result;
       if (!dir.ok) return { kind: 'ask', rule: 'outside-workspace' };
-      // PTY input belongs to a live interpreter/cwd and may continue previous
-      // input. Only full access (handled above) delegates it without approval.
       return { kind: 'ask', rule: 'opaque-execution' };
     }
     if (exec.name === 'str_replace_editor') {
-      if (typeof args.command !== 'string' || !args.command.trim()) return { kind: 'deny', rule: 'invalid-arguments' };
+      if (!isValidTextArg(args.command)) return { kind: 'deny', rule: 'invalid-arguments' };
       const extracted = extractWritePaths(exec.name, args);
       if (!extracted.ok || extracted.paths.length === 0) return { kind: 'deny', rule: 'invalid-arguments' };
       const subcommand = args.command.trim();
@@ -527,15 +495,9 @@ export class OperationSafety {
       if (!['create', 'str_replace', 'insert'].includes(subcommand)) return { kind: 'ask', rule: 'opaque-execution' };
       return { kind: 'allow' };
     }
-    if ((OPS_WRITE_TOOLS as readonly string[]).includes(exec.name) || exec.name === 'ops_remove') {
-      return assessOpsFile(exec.name, args, policy);
-    }
-    if ((BATCH_TOOLS as readonly string[]).includes(exec.name)) {
-      return assessOpsBatch(args, policy);
-    }
-    if ((CODE_TOOLS as readonly string[]).includes(exec.name)) {
-      return assessRunCode(args, policy);
-    }
+    if ((OPS_WRITE_TOOLS as readonly string[]).includes(exec.name) || exec.name === 'ops_remove') return assessOpsFile(exec.name, args, policy);
+    if ((BATCH_TOOLS as readonly string[]).includes(exec.name)) return assessOpsBatch(args, policy);
+    if ((CODE_TOOLS as readonly string[]).includes(exec.name)) return assessRunCode(args, policy);
     const extracted = extractWritePaths(exec.name, args);
     if (!extracted.ok || extracted.paths.length === 0) return { kind: 'deny', rule: 'invalid-arguments' };
     if (policy.mode === 'read-only') return { kind: 'deny', rule: 'read-only-write' };
@@ -567,32 +529,39 @@ export class OperationSafety {
   }
   private covered(exec: ToolExecution): boolean { return SAFETY_TOOLS.includes(exec.name); }
   private guard(exec: ToolExecution): string | undefined {
-    if (!this.enabled || !this.covered(exec)) return;
+    if (!this.store.value || !this.covered(exec)) return;
     try {
       if (this.disposed || exec.signal?.aborted) return this.deny(exec, 'cancelled').reason;
-      const { assessment, policy } = this.inspect(exec);
-      if (assessment.kind === 'deny') return this.deny(exec, assessment.rule, policy).reason;
-      if (assessment.kind === 'ask') {
-        const grant = this.grants.get(exec);
-        if (!policy || grant?.revision !== this.revision || grant.key !== this.key(exec, policy)) return this.deny(exec, 'approval-unavailable', policy).reason;
-        this.grants.delete(exec); // one invocation, never a command-prefix permission
+      const unavailable = this.capabilityReason();
+      if (unavailable) return this.deny(exec, unavailable).reason;
+      let policy: Policy;
+      try { policy = this.policy(exec); } catch { return this.deny(exec, 'policy-unavailable').reason; }
+      // Reuse the verified before() grant when invocation, arguments, policy and revision match.
+      const grant = this.grants.get(exec);
+      if (grant?.revision === this.revision && grant.key === this.key(exec, policy)) {
+        this.grants.delete(exec);
+        return;
       }
+      const assessment = this.assessment(exec, policy);
+      if (assessment.kind === 'deny') return this.deny(exec, assessment.rule, policy).reason;
+      if (assessment.kind === 'ask') return this.deny(exec, 'approval-unavailable', policy).reason;
     } catch { return this.deny(exec, 'check-failed').reason; }
   }
   private async before(exec: ToolExecution, next: () => Promise<PreToolDecision>): Promise<PreToolDecision> {
-    if (!this.enabled || !this.covered(exec)) return next();
+    if (!this.store.value || !this.covered(exec)) return next();
     this.checked++;
     try {
       if (this.disposed || exec.signal?.aborted) return this.deny(exec, 'cancelled');
       const { assessment, policy } = this.inspect(exec);
       if (assessment.kind === 'deny') return this.deny(exec, assessment.rule, policy);
-      if (assessment.kind === 'allow') return next();
+      if (assessment.kind === 'allow') {
+        if (policy) this.grants.set(exec, { key: this.key(exec, policy), revision: this.revision });
+        return next();
+      }
       const approval = this.service('approval') as ApprovalService | undefined;
       if (!approval?.request || !exec.agent || !exec.callId || !exec.signal || !policy) return this.deny(exec, 'approval-unavailable', policy);
       const revision = this.revision, key = this.key(exec, policy);
       const signal = AbortSignal.any([exec.signal, this.shutdown.signal]);
-      // Full, frozen input is shown only in the host's approval UI/log, not in
-      // plugin diagnostics. No model-provided description substitutes for it.
       const rawDetails = JSON.stringify({ tool: exec.name, mode: policy.mode, workspace: policy.workspaceRoot,
         workdir: isRecord(exec.arguments) ? exec.arguments.workdir ?? exec.arguments.cwd ?? policy.workspaceRoot : policy.workspaceRoot,
         arguments: exec.arguments }, null, 2);
@@ -614,22 +583,18 @@ export class OperationSafety {
   }
   status(): SafetyStatus {
     const reason = this.capabilityReason();
-    return { enabled: this.enabled, state: this.disposed ? 'disposed' : !this.enabled ? 'disabled' : reason ? 'blocked' : 'active',
-      reason, hostVersion: this.hostVersion || 'unknown', verifiedHosts: [...SAFETY_HOSTS], coveredTools: [...SAFETY_TOOLS], persistent: !!this.file,
+    return { enabled: this.store.value, state: this.disposed ? 'disposed' : !this.store.value ? 'disabled' : reason ? 'blocked' : 'active',
+      reason, hostVersion: this.hostVersion || 'unknown', verifiedHosts: [...SAFETY_HOSTS], coveredTools: [...SAFETY_TOOLS], persistent: this.store.persistent,
       checked: this.checked, denied: this.denied, approvalRequests: this.approvalRequests, approved: this.approved,
       events: this.events.map(event => ({ ...event })) };
   }
   setEnabled(enabled: boolean): Promise<SafetyStatus> {
     if (typeof enabled !== 'boolean') return Promise.reject(new TypeError('expected enabled boolean'));
-    const operation = this.saving.catch(() => {}).then(async () => {
-      if (this.disposed) throw new Error('operation safety disposed');
-      if (this.file) await writeProfileFile(this.file, JSON.stringify({ enabled }, null, 2) + '\n');
-      this.enabled = enabled; this.settingsError = false; this.revision++;
-      return this.status();
+    return this.store.update(enabled, {
+      afterWrite: () => { this.revision++; return this.status(); },
     });
-    this.saving = operation; return operation;
   }
   async close(): Promise<void> {
-    this.disposed = true; this.shutdown.abort(); this.unregister?.(); await this.saving.catch(() => {});
+    this.disposed = true; this.shutdown.abort(); this.unregister?.(); await this.store.close();
   }
 }

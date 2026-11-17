@@ -2,12 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, mkdir, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { valid, gt, satisfies } from 'semver';
-import { list } from 'tar';
 import { gunzipSync } from 'node:zlib';
-import { finished } from 'node:stream/promises';
 import type { HostContext } from './types.js';
-import { PROFILE_DIR, writeProfileFile } from './profile-file.js';
+import { PROFILE_DIR, SerializedQueue, writeProfileFile } from './profile-file.js';
+import { gtVersion, satisfiesRange, validVersion } from './semver.js';
+import { parseTar } from './tar.js';
 
 export const REPOSITORY = 'https://github.com/MyRemme/dsh-runtime-guard';
 const API = 'https://api.github.com/repos/MyRemme/dsh-runtime-guard';
@@ -16,6 +15,8 @@ const MAX_ARCHIVE = 32 * 1024 * 1024;
 const INTERVAL = 6 * 60 * 60 * 1000;
 const CHECK_CACHE = 60 * 1000;
 const PUBLIC_MANIFEST = 'https://raw.githubusercontent.com/MyRemme/dsh-runtime-guard/main/updates/stable.json';
+const RETRYABLE_NETWORK_ERRORS = new Set(['github-auth-or-release', 'github-denied', 'github-network']);
+
 export interface UpdateStatus {
   repository: string; currentVersion: string; available: boolean; automatic: boolean;
   phase: 'unavailable' | 'idle' | 'checking' | 'current' | 'available' | 'waiting-idle' | 'downloading' | 'installing' | 'restart-required' | 'error';
@@ -42,8 +43,8 @@ export function releaseCandidate(value: unknown, current: string): Candidate | n
   const release = value as { draft?: boolean; prerelease?: boolean; tag_name?: string; assets?: Asset[] };
   if (!release || release.draft || release.prerelease || typeof release.tag_name !== 'string' || !Array.isArray(release.assets)) return failure('invalid-release');
   const version = release.tag_name.replace(/^v/, '');
-  if (!valid(version) || version.includes('-')) return failure('invalid-release');
-  if (!gt(version, current)) return null;
+  if (!validVersion(version) || version.includes('-')) return failure('invalid-release');
+  if (!gtVersion(version, current)) return null;
   const asset = release.assets.find(asset => asset.name === `${manifest.name}-${version}.tgz`);
   const checksum = release.assets.find(asset => asset.name === 'checksums.sha256');
   for (const item of [asset, checksum].filter(Boolean) as Asset[]) {
@@ -56,11 +57,11 @@ export function releaseCandidate(value: unknown, current: string): Candidate | n
 /** Public Release metadata uses fixed repository URLs, never supplied download URLs. */
 export function manifestCandidate(value: unknown, current: string): Candidate | null {
   const data = value as { schemaVersion?: unknown; version?: unknown; name?: unknown; size?: unknown; sha256?: unknown; assetId?: unknown } | null;
-  if (!data || data.schemaVersion !== 1 || typeof data.version !== 'string' || !valid(data.version) || data.version.includes('-')
+  if (!data || data.schemaVersion !== 1 || typeof data.version !== 'string' || !validVersion(data.version) || data.version.includes('-')
     || data.name !== `${manifest.name}-${data.version}.tgz` || !Number.isSafeInteger(data.size) || (data.size as number) <= 0
     || (data.size as number) > MAX_ARCHIVE || typeof data.sha256 !== 'string' || !/^[a-f\d]{64}$/i.test(data.sha256)
     || (data.assetId !== undefined && (!Number.isSafeInteger(data.assetId) || (data.assetId as number) <= 0))) return failure('invalid-release');
-  if (!gt(data.version, current)) return null;
+  if (!gtVersion(data.version, current)) return null;
   return { version: data.version, source: 'public', checksum: undefined,
     asset: { name: data.name, size: data.size as number, digest: `sha256:${data.sha256}`,
       ...(data.assetId === undefined ? {} : { id: data.assetId as number }) } };
@@ -68,53 +69,49 @@ export function manifestCandidate(value: unknown, current: string): Candidate | 
 
 /** Inspect every entry before pnpm sees it; no links, traversal or install scripts. */
 export async function validateArchive(file: string, version: string, hostVersion: string): Promise<void> {
-  const names = new Set<string>();
-  let entries = 0, bytes = 0, invalid = false, manifestBytes = 0;
-  const body: Buffer[] = [];
-  const bundledManifests = new Map<string, Buffer[]>();
   const uncompressed = gunzipSync(await readFile(file), { maxOutputLength: 64 * 1024 * 1024 });
-  const parser = list({ strict: true, onReadEntry: entry => {
+  let entries;
+  try { entries = parseTar(uncompressed); } catch { return failure('invalid-archive'); }
+  if (entries.length > 3000) return failure('invalid-archive');
+
+  const names = new Set<string>();
+  let bytes = 0, manifestBytes = 0;
+  let rootManifest: Buffer | undefined;
+  const bundledManifests: Buffer[] = [];
+  for (const entry of entries) {
     bytes += entry.size;
-    if (++entries > 3000 || bytes > 64 * 1024 * 1024 || !entry.path.startsWith('package/') || entry.path.includes('\\')
-      || entry.path.split('/').some(part => part === '..' || part === '.') || names.has(entry.path)
-      || !['File', 'Directory'].includes(entry.type)) invalid = true;
-    names.add(entry.path);
-    if (entry.size > 4 * 1024 * 1024) invalid = true;
-    if (entry.path === 'package/package.json' && entry.size <= 256 * 1024) {
-      entry.on('data', part => { body.push(Buffer.from(part)); });
-    } else if (/^package\/(?:.+\/)?node_modules\/(?:@[^/]+\/)?[^/]+\/package\.json$/.test(entry.path) && entry.size <= 256 * 1024) {
-      const parts: Buffer[] = [];
-      bundledManifests.set(entry.path, parts);
-      entry.on('data', part => {
-        manifestBytes += part.length;
-        if (manifestBytes <= 4 * 1024 * 1024) parts.push(Buffer.from(part));
-        else invalid = true;
-      });
-    }
-  } });
-  const done = finished(parser); parser.end(uncompressed); await done;
-  if (invalid || !names.has('package/dist/index.js') || !names.has('package/client/client.js') || !names.has('package/cordis.patch.yml') || !body.length) return failure('invalid-archive');
-  let pkg: { name: string; version: string; scripts?: Record<string, unknown>; engines?: { node?: string; dsh?: string }; dependencies?: Record<string, string> };
-  try {
-    pkg = JSON.parse(Buffer.concat(body).toString());
-  } catch {
-    return failure('invalid-archive');
-  }
-  if (!pkg || pkg.name !== manifest.name || pkg.version !== version) return failure('invalid-archive');
-  const installKeys = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
-  if (installKeys.some(key => pkg.scripts?.[key])) return failure('install-scripts');
-  for (const parts of bundledManifests.values()) {
-    let depPkg: { scripts?: Record<string, unknown> };
-    try {
-      depPkg = JSON.parse(Buffer.concat(parts).toString());
-    } catch {
+    if (bytes > 64 * 1024 * 1024 || entry.size > 4 * 1024 * 1024 || entry.type === 'Other'
+      || !entry.path.startsWith('package/') || entry.path.includes('\\')
+      || entry.path.split('/').some(part => part === '..' || part === '.') || names.has(entry.path)) {
       return failure('invalid-archive');
     }
+    names.add(entry.path);
+    if (entry.type === 'File' && entry.path === 'package/package.json' && entry.size <= 256 * 1024) {
+      rootManifest = entry.content;
+    } else if (entry.type === 'File' && /^package\/(?:.+\/)?node_modules\/(?:@[^/]+\/)?[^/]+\/package\.json$/.test(entry.path) && entry.size <= 256 * 1024) {
+      manifestBytes += entry.size;
+      if (manifestBytes > 4 * 1024 * 1024) return failure('invalid-archive');
+      bundledManifests.push(entry.content);
+    }
+  }
+  if (!names.has('package/dist/index.js') || !names.has('package/client/client.js') || !names.has('package/cordis.patch.yml') || !rootManifest?.length) {
+    return failure('invalid-archive');
+  }
+
+  let pkg: { name: string; version: string; scripts?: Record<string, unknown>; engines?: { node?: string; dsh?: string }; dependencies?: Record<string, string> };
+  try { pkg = JSON.parse(rootManifest.toString()); } catch { return failure('invalid-archive'); }
+  if (!pkg || pkg.name !== manifest.name || pkg.version !== version) return failure('invalid-archive');
+
+  const installKeys = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
+  if (installKeys.some(key => pkg.scripts?.[key])) return failure('install-scripts');
+  for (const buf of bundledManifests) {
+    let depPkg: { scripts?: Record<string, unknown> };
+    try { depPkg = JSON.parse(buf.toString()); } catch { return failure('invalid-archive'); }
     if (depPkg?.scripts && installKeys.some(key => depPkg.scripts?.[key])) return failure('install-scripts');
   }
-  if (Object.values(pkg.dependencies ?? {}).some(value => !valid(value))) return failure('invalid-dependencies');
-  if (!valid(hostVersion) || !pkg.engines?.dsh || !satisfies(hostVersion, pkg.engines.dsh)
-    || !pkg.engines.node || !satisfies(process.versions.node, pkg.engines.node)) return failure('incompatible-host');
+  if (Object.values(pkg.dependencies ?? {}).some(value => !validVersion(value))) return failure('invalid-dependencies');
+  if (!validVersion(hostVersion) || !pkg.engines?.dsh || !satisfiesRange(hostVersion, pkg.engines.dsh)
+    || !pkg.engines.node || !satisfiesRange(process.versions.node, pkg.engines.node)) return failure('incompatible-host');
 }
 
 export class Updater implements UpdateAPI {
@@ -128,7 +125,7 @@ export class Updater implements UpdateAPI {
   private abort = new AbortController();
   private timer: ReturnType<typeof setInterval> | undefined;
   private directory: string;
-  private saving: Promise<void> = Promise.resolve();
+  private saveQueue = new SerializedQueue();
   private nextCheck = Date.now();
   private apiRetryAt = 0;
   constructor(private readonly options: {
@@ -145,7 +142,7 @@ export class Updater implements UpdateAPI {
       const saved = JSON.parse(await readFile(join(this.directory, 'state.json'), 'utf8')) as Partial<UpdateStatus>;
       this.state.automatic = saved.automatic === true;
       this.state.updatedAt = typeof saved.updatedAt === 'string' ? saved.updatedAt : null;
-      if (saved.phase === 'restart-required' && saved.latestVersion && valid(saved.latestVersion) && gt(saved.latestVersion, this.state.currentVersion)) {
+      if (saved.phase === 'restart-required' && saved.latestVersion && validVersion(saved.latestVersion) && gtVersion(saved.latestVersion, this.state.currentVersion)) {
         this.state.phase = 'restart-required'; this.state.latestVersion = saved.latestVersion;
       }
     } catch { /* First installation or invalid state starts with automatic updates off. */ }
@@ -159,12 +156,13 @@ export class Updater implements UpdateAPI {
     this.timer.unref();
   }
   status(): UpdateStatus { return { ...this.state }; }
-  private save(): Promise<void> {
-    const snapshot = JSON.stringify(this.state, null, 2) + '\n';
-    this.saving = this.saving.catch(() => {}).then(async () => {
+  private save(next: UpdateStatus = this.state): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    const snapshot = JSON.stringify(next, null, 2) + '\n';
+    return this.saveQueue.run(async () => {
+      if (this.disposed) return;
       await writeProfileFile(join(this.directory, 'state.json'), snapshot);
     });
-    return this.saving;
   }
   async setAutomatic(enabled: boolean): Promise<UpdateStatus> {
     this.state.automatic = enabled;
@@ -235,18 +233,13 @@ export class Updater implements UpdateAPI {
       return { candidate: manifestCandidate(data, this.state.currentVersion), version: data.version };
     } catch (error) {
       if (this.abort.signal.aborted) throw error;
-      // Never bypass malformed metadata or an unsafe redirect with another source.
-      if (error instanceof UpdateFailure && !['github-auth-or-release', 'github-denied', 'github-network'].includes(error.message)) throw error;
+      if (error instanceof UpdateFailure && !RETRYABLE_NETWORK_ERRORS.has(error.message)) throw error;
       if (error instanceof SyntaxError) return failure('invalid-release');
     }
     if (Date.now() < this.apiRetryAt) return failure('github-denied');
     const body = await this.request(`${API}/releases/latest`, 1024 * 1024);
     let data: { tag_name?: string };
-    try {
-      data = JSON.parse(body.toString());
-    } catch {
-      return failure('invalid-release');
-    }
+    try { data = JSON.parse(body.toString()); } catch { return failure('invalid-release'); }
     const candidate = releaseCandidate(data, this.state.currentVersion);
     return { candidate, version: data.tag_name!.replace(/^v/, '') };
   }
@@ -310,8 +303,7 @@ export class Updater implements UpdateAPI {
     this.pending = this.pending === 'manual' ? 'manual' : source; this.state.phase = 'waiting-idle';
     await this.save().catch(() => failure('storage-failed'));
   }
-  private async prepareArchive(candidate: Candidate, task: InstallTask): Promise<string> {
-    const active = () => { this.abort.signal.throwIfAborted(); task.abort.signal.throwIfAborted(); };
+  private async prepareArchive(candidate: Candidate, task: InstallTask, active: () => void): Promise<string> {
     active();
     const cached = this.prepared;
     if (cached?.candidate === candidate) {
@@ -323,8 +315,7 @@ export class Updater implements UpdateAPI {
         if (archive.length !== candidate.asset.size || createHash('sha256').update(archive).digest('hex') !== cached.hash) {
           this.prepared = null; return failure('checksum-failed');
         }
-        await validateArchive(cached.file, candidate.version, this.options.hostVersion);
-        active(); return cached.file;
+        return cached.file;
       }
       this.prepared = null;
     }
@@ -336,8 +327,7 @@ export class Updater implements UpdateAPI {
     } catch (error) {
       active();
       if (candidate.source !== 'public' || !candidate.asset.id || Date.now() < this.apiRetryAt
-        || (error instanceof UpdateFailure && !['github-auth-or-release', 'github-denied', 'github-network'].includes(error.message))) throw error;
-      // Some networks can access the API/CDN but cannot connect to github.com.
+        || (error instanceof UpdateFailure && !RETRYABLE_NETWORK_ERRORS.has(error.message))) throw error;
       archive = await this.request(`${API}/releases/assets/${candidate.asset.id}`, MAX_ARCHIVE, true, task.abort.signal);
     }
     active();
@@ -358,28 +348,35 @@ export class Updater implements UpdateAPI {
   }
   private async performInstall(candidate: Candidate, task: InstallTask): Promise<void> {
     const active = () => { this.abort.signal.throwIfAborted(); task.abort.signal.throwIfAborted(); };
+    const yieldIfBusy = async (): Promise<boolean> => {
+      active();
+      if (this.options.idle()) return false;
+      await this.waitForIdle(task.source);
+      active();
+      return true;
+    };
     try {
-      active();
-      const file = await this.prepareArchive(candidate, task);
-      active();
-      if (!this.options.idle()) { active(); await this.waitForIdle(task.source); active(); return; }
+      const file = await this.prepareArchive(candidate, task, active);
+      if (await yieldIfBusy()) return;
       this.state.phase = 'installing'; await this.save();
-      active();
-      if (!this.options.idle()) { active(); await this.waitForIdle(task.source); active(); return; }
+      if (await yieldIfBusy()) return;
       // Cancellation is effective until this synchronous handoff. The host owns
       // an installation already submitted, including plugin disposal during HMR.
       task.submitted = true;
       const result = await this.options.manager.installBundle(file, { enabled: true, requestId: `${manifest.name}-${randomUUID()}` });
       if (!['applied', 'restart-required'].includes(result.application) || result.version !== candidate.version) return failure('host-install-failed');
-      this.state.phase = result.application === 'restart-required' ? 'restart-required' : 'current';
-      if (result.application === 'applied') this.state.currentVersion = candidate.version;
-      this.state.updatedAt = new Date().toISOString(); this.state.error = null;
+      const finished: UpdateStatus = {
+        ...this.state,
+        phase: result.application === 'restart-required' ? 'restart-required' : 'current',
+        currentVersion: result.application === 'applied' ? candidate.version : this.state.currentVersion,
+        updatedAt: new Date().toISOString(),
+        error: null,
+      };
       this.prepared = null;
-      await this.save();
+      await this.save(finished);
+      Object.assign(this.state, finished);
     } catch (error) {
       if (this.disposed && !task.submitted) return;
-      // Once the final phase is visible, a follow-up check or manual retry must be
-      // accepted even while this task's state snapshot is still being persisted.
       if (this.installing === task) this.installing = null;
       if (task.abort.signal.aborted && !task.submitted) {
         if (this.state.error !== 'storage-failed') { this.state.phase = 'available'; this.state.error = null; }

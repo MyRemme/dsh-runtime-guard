@@ -1,5 +1,4 @@
-import { join } from 'node:path';
-import { PROFILE_DIR, readProfileJsonSync, writeProfileFile } from './profile-file.js';
+import { ProfileJsonStore } from './profile-file.js';
 import { resolveSettings, Config, type Settings } from './config.js';
 import { compatibilityFor, detectHostVersion } from './compatibility.js';
 import { StepLoopTracker, type RepeatEvidence } from './detection.js';
@@ -53,7 +52,7 @@ interface SessionState {
   route?: RequestOptions;
   request?: RequestState; activity?: RequestState;
   frameId?: string; progress: ProgressGuard; stepTracker: StepLoopTracker; ending?: Record<string, unknown>;
-  enabled: boolean; noticeKeys: Set<string>;
+  enabled: boolean;
   coverage: 'waiting' | 'other-model' | 'auxiliary' | 'unavailable' | 'checked';
   monitoredRequests: number; confirmed: number; toolWarnings: number; recoverySubmitted: number; cancelRequested: number; lastMonitoredAt: string | null;
   latestEvent: DiagnosticEvent | null;
@@ -63,7 +62,6 @@ interface SessionState {
 export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
   const config = resolveSettings(input);
   if (!config.enabled) return;
-  // Launcher metadata can be provided while its fiber is still activating.
   const profile = ctx.get?.('profileContext', false) as { installAnchor?: string; dir?: string } | undefined;
   const detected = detectHostVersion(profile?.installAnchor);
   // Only detected metadata unlocks safety; hostVersion is merely a monitor hint.
@@ -71,36 +69,31 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
   const compatibility = profile?.installAnchor
     ? compatibilityFor(detected ?? config.hostVersion ?? '')
     : compatibilityFor(config.hostVersion || detected || '');
-  // Stale hostVersion in cordis.patch.yml must not downgrade a verified detected runtime;
-  // mismatched/unrecognized hosts without an installAnchor or conflicting packages still lock out guard/auto.
-  if (profile?.installAnchor) {
-    if (!detected) {
-      compatibility.intervention = false; compatibility.guard = false;
-      if (compatibility.reason === 'host-tests-passed' || compatibility.reason === 'automatic-intervention-not-verified') {
-        compatibility.reason = 'host-version-unverified';
-      }
+  if (profile?.installAnchor && !detected) {
+    compatibility.intervention = false; compatibility.guard = false;
+    if (compatibility.reason === 'host-tests-passed' || compatibility.reason === 'automatic-intervention-not-verified') {
+      compatibility.reason = 'host-version-unverified';
     }
-  } else if (config.hostVersion && detected !== config.hostVersion) {
+  } else if (!profile?.installAnchor && config.hostVersion && detected !== config.hostVersion) {
     compatibility.intervention = false; compatibility.guard = false;
     if (compatibility.reason === 'host-tests-passed' || compatibility.reason === 'automatic-intervention-not-verified') {
       compatibility.reason = 'host-version-mismatch';
     }
   }
-  const modeFile = profile?.dir ? join(profile.dir, PROFILE_DIR, 'mode.json') : undefined;
-  let configuredMode: Settings['mode'] = config.mode;
-  if (profile?.dir) {
-    try {
-      const saved = readProfileJsonSync(profile.dir, 65536, 'mode.json') as { mode?: unknown } | undefined;
-      if (saved && typeof saved === 'object' && !Array.isArray(saved) && Object.keys(saved).length === 1 && ['observe', 'assist', 'guard'].includes(saved.mode as string)) {
-        configuredMode = saved.mode as Settings['mode'];
-      }
-    } catch { /* Optional saved mode. */ }
-  }
+  const modeStore = new ProfileJsonStore<Settings['mode']>({
+    directory: profile?.dir,
+    subpath: ['mode.json'],
+    maxBytes: 65536,
+    defaultValue: config.mode,
+    parse: raw => (raw && typeof raw === 'object' && !Array.isArray(raw)
+      && ['observe', 'assist', 'guard'].includes((raw as { mode?: unknown }).mode as string)
+      ? (raw as { mode: Settings['mode'] }).mode : undefined),
+    serialize: mode => JSON.stringify({ mode }, null, 2) + '\n',
+  });
   const modeFor = (requested: Settings['mode']): Settings['mode'] =>
     requested === 'auto' ? (compatibility.intervention ? 'auto' : compatibility.guard ? 'guard' : 'observe')
     : requested === 'guard' && !compatibility.guard ? 'observe' : requested;
-  let effectiveMode = modeFor(configuredMode);
-  let modeSaving: Promise<unknown> = Promise.resolve();
+  let effectiveMode = modeFor(modeStore.value);
   const states = new Map<string, SessionState>();
   const disabledSessions = new Set<string>(config.disabledSessions);
   let disposed = false;
@@ -153,12 +146,20 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
   }, profile?.dir, () => {
     for (const state of states.values()) {
       const eligible = modelScope.matches(state.request?.route ?? state.route ?? {});
-      if (!eligible) { state.coverage = 'other-model'; delete state.request; state.progress.clear(); state.stepTracker.clear(); }
+      if (!eligible) deactivateTracking(state, 'other-model');
       else if (state.coverage === 'other-model') state.coverage = 'waiting';
       recovery.setEnabled(state.agent, monitoring && state.enabled && eligible);
     }
   });
   const selected = (options: RequestOptions) => modelScope.matches(options);
+  const deactivateTracking = (state: SessionState, coverage: SessionState['coverage']) => {
+    state.progress.clear();
+    state.stepTracker.clear();
+    if (state.request || coverage === 'other-model') {
+      state.coverage = coverage;
+      delete state.request;
+    }
+  };
   const stateFor = (agent: Agent): SessionState => {
     let state = states.get(agent.id);
     if (state?.agent === agent) {
@@ -174,7 +175,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     }
     const enabled = !disabledSessions.has(agent.id);
     recovery.setEnabled(agent, enabled && monitoring && selected(agent.model?.current() ?? agent.options ?? {}));
-    state = { agent, turn: 0, step: 0, progress: new ProgressGuard(config.toolRepeatLimit), stepTracker: new StepLoopTracker(), enabled, noticeKeys: new Set(),
+    state = { agent, turn: 0, step: 0, progress: new ProgressGuard(config.toolRepeatLimit), stepTracker: new StepLoopTracker(), enabled,
       coverage: 'waiting', monitoredRequests: 0, confirmed: 0, toolWarnings: 0, recoverySubmitted: 0, cancelRequested: 0, lastMonitoredAt: null, latestEvent: null, toolResults: 0, lastToolAt: null,
       ...metrics.sessionSummary(sessionKey(agent.id)) };
     states.set(agent.id, state);
@@ -189,7 +190,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
       modelScope.remember(state.route);
       recovery.setEnabled(state.agent, monitoring && state.enabled && selected(state.route));
       if (payload.messages.some(m => m.source?.kind === 'user')) {
-        recovery.resetByUser(payload.agent); state.progress.clear(); state.stepTracker.clear(); state.noticeKeys.clear();
+        recovery.resetByUser(payload.agent); state.progress.clear(); state.stepTracker.clear();
       }
     }, () => states.get(payload.agent.id));
     return next(); // Preserve downstream decisions, messages and startsRequestSeries verbatim.
@@ -199,7 +200,6 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
   });
 
   ctx.on('llm/stream', (options: RequestOptions, next: () => AsyncIterable<Chunk>) => {
-    // Delegate exactly once, outside our error containment: host failures remain authoritative.
     const upstream = next();
     const state = options.sessionId ? states.get(options.sessionId) : undefined;
     if (state && !disposed && !options.purpose) {
@@ -243,12 +243,11 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
           const cross = state.stepTracker.observe(reasoningText, Math.max(3, config.confirmations));
           if (cross) emitRepeat({ ...cross, contentType: 'reasoning' });
         });
-        state.noticeKeys.clear();
         state.latestEvent = null;
         state.route = routeOf(options);
         recovery.setEnabled(state.agent, monitoring && state.enabled && selected(options));
         request = { monitor, signal, route: state.route, turn: state.turn, step: state.step, startedAt: new Date().toISOString(), ...(state.frameId ? { frameId: state.frameId } : {}) };
-        delete state.frameId; // A pre-stream start frame is consumed once, including retries in the same step.
+        delete state.frameId;
         state.activity = request;
         state.request = request;
         state.monitoredRequests++; state.lastMonitoredAt = new Date().toISOString(); state.coverage = 'checked';
@@ -306,7 +305,6 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
       const extra = Math.min(10, Math.floor((evidence.count - config.toolRepeatLimit) / config.toolRepeatLimit) * 5);
       report({ kind: 'tool-repeat', session: exec.agent.id, score: (evidence.failed ? 85 : 70) + extra, confirmed: false, chars: 0,
         repeats: evidence.count, turn: state.turn, step: state.step });
-      // Repetition of a tool is observation only; never skip, deny, or replay it.
     }
   }, exec.agent ? states.get(exec.agent.id) : undefined));
   ctx.on('session/event', (session: { id: string }, event: { type: string; data: Record<string, unknown> }) => guarded(() => {
@@ -328,25 +326,25 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     recovery.forget(agent);
   }, states.get(agent.id)));
   const sessionStatus = (sessionId: string, key = sessionKey(sessionId)): ReturnType<RuntimeGuardAPI['sessionStatus']> => {
-      const state = states.get(sessionId);
-      const saved = metrics.sessionSummary(key), counters = state ?? saved;
-      const activity = state?.activity, live = activity?.monitor.snapshot();
-      const events = metrics.forKey(key);
-      const retained = (kind: string, action?: string) => events.filter(event => event.kind === kind && (action ? event.action === action : event.confirmed)).length;
-      return {
-        monitoring: monitoring && !disposed, sessionEnabled: !disabledSessions.has(sessionId), mode: effectiveMode, startedAt,
-        coverage: !monitoring || disposed ? 'paused' : disabledSessions.has(sessionId) ? 'disabled'
-          : state?.request ? 'monitoring' : state?.coverage ?? 'waiting',
-        monitoredRequests: counters?.monitoredRequests ?? 0, activeRequests: state?.request ? 1 : 0,
-        counterScope: state ? 'tracked' : saved ? 'history' : 'retained-events',
-        confirmed: counters?.confirmed ?? retained('stream-repeat'), toolWarnings: counters?.toolWarnings ?? events.filter(e => e.kind === 'tool-repeat').length,
-        recoverySubmitted: counters?.recoverySubmitted ?? retained('recovery', 'recovery-submitted'), cancelRequested: counters?.cancelRequested ?? retained('recovery', 'cancel-requested'),
-        lastMonitoredAt: counters?.lastMonitoredAt ?? null, latestEvent: state?.latestEvent ? { ...state.latestEvent } : state ? null : events[0] ?? null, events,
-        turn: counters?.turn ?? 0, step: counters?.step ?? 0, toolResults: counters?.toolResults ?? 0, lastToolAt: counters?.lastToolAt ?? null,
-        live: activity && live ? { ...live, turn: activity.turn, step: activity.step, startedAt: activity.startedAt,
-          active: state.request === activity, silentForMs: state.request === activity ? Math.max(0, Date.now() - Date.parse(live.lastOutputAt ?? activity.startedAt)) : 0 } : null,
-      };
+    const state = states.get(sessionId);
+    const saved = metrics.sessionSummary(key), counters = state ?? saved;
+    const activity = state?.activity, live = activity?.monitor.snapshot();
+    const events = metrics.forKey(key);
+    const retained = (kind: string, action?: string) => events.filter(event => event.kind === kind && (action ? event.action === action : event.confirmed)).length;
+    return {
+      monitoring: monitoring && !disposed, sessionEnabled: !disabledSessions.has(sessionId), mode: effectiveMode, startedAt,
+      coverage: !monitoring || disposed ? 'paused' : disabledSessions.has(sessionId) ? 'disabled'
+        : state?.request ? 'monitoring' : state?.coverage ?? 'waiting',
+      monitoredRequests: counters?.monitoredRequests ?? 0, activeRequests: state?.request ? 1 : 0,
+      counterScope: state ? 'tracked' : saved ? 'history' : 'retained-events',
+      confirmed: counters?.confirmed ?? retained('stream-repeat'), toolWarnings: counters?.toolWarnings ?? events.filter(e => e.kind === 'tool-repeat').length,
+      recoverySubmitted: counters?.recoverySubmitted ?? retained('recovery', 'recovery-submitted'), cancelRequested: counters?.cancelRequested ?? retained('recovery', 'cancel-requested'),
+      lastMonitoredAt: counters?.lastMonitoredAt ?? null, latestEvent: state?.latestEvent ? { ...state.latestEvent } : state ? null : events[0] ?? null, events,
+      turn: counters?.turn ?? 0, step: counters?.step ?? 0, toolResults: counters?.toolResults ?? 0, lastToolAt: counters?.lastToolAt ?? null,
+      live: activity && live ? { ...live, turn: activity.turn, step: activity.step, startedAt: activity.startedAt,
+        active: state.request === activity, silentForMs: state.request === activity ? Math.max(0, Date.now() - Date.parse(live.lastOutputAt ?? activity.startedAt)) : 0 } : null,
     };
+  };
   const api: RuntimeGuardAPI = {
     sessionStatus,
     conversations: () => {
@@ -369,26 +367,20 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     setMonitoring: enabled => guarded(() => {
       monitoring = enabled;
       for (const state of states.values()) {
-        if (!enabled) { state.progress.clear(); state.stepTracker.clear(); }
-        if (!enabled && state.request) { state.coverage = 'unavailable'; delete state.request; }
+        if (!enabled) deactivateTracking(state, 'unavailable');
         recovery.setEnabled(state.agent, enabled && state.enabled && selected(state.request?.route ?? state.route ?? {}));
       }
     }),
     setMode: nextMode => {
       if (!['observe', 'assist', 'guard'].includes(nextMode)) return Promise.reject(new TypeError('invalid mode'));
       if (nextMode === 'guard' && !compatibility.guard) return Promise.reject(new Error('guard mode unavailable'));
-      const operation = modeSaving.catch(() => {}).then(async () => {
-        if (disposed) throw new Error('settings unavailable');
-        if (modeFile) {
-          await writeProfileFile(modeFile, JSON.stringify({ mode: nextMode }, null, 2) + '\n');
-        }
-        configuredMode = nextMode;
-        effectiveMode = modeFor(nextMode);
-        recovery.setMode(effectiveMode);
-        return api.status();
+      return modeStore.update(nextMode, {
+        afterWrite: () => {
+          effectiveMode = modeFor(nextMode);
+          recovery.setMode(effectiveMode);
+          return api.status();
+        },
       });
-      modeSaving = operation;
-      return operation;
     },
     modelScope: () => modelScope.view(),
     operationSafety: () => operationSafety.status(),
@@ -411,8 +403,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
       const agent = states.get(sessionId)?.agent ?? ctx.agents?.get(sessionId);
       if (!agent) return;
       const state = stateFor(agent); state.enabled = enabled;
-      if (!enabled) { state.progress.clear(); state.stepTracker.clear(); }
-      if (!enabled && state.request) { state.coverage = 'unavailable'; delete state.request; }
+      if (!enabled) deactivateTracking(state, 'unavailable');
       recovery.setEnabled(agent, enabled && monitoring && selected(state.request?.route ?? state.route ?? agent.model?.current() ?? agent.options ?? {}));
     }),
   };
@@ -423,8 +414,8 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
       && api.status().activeRequests === 0;
   });
   registerUI(ctx, api, updates);
-  if (configuredMode !== effectiveMode) warn(config.language === 'zh' ? 'DSH Runtime Guard：此版本尚未通过所选干预模式验证，已使用观察模式。' : 'DSH Runtime Guard: selected intervention is not verified; using observation mode.');
+  if (modeStore.value !== effectiveMode) warn(config.language === 'zh' ? 'DSH Runtime Guard：此版本尚未通过所选干预模式验证，已使用观察模式。' : 'DSH Runtime Guard: selected intervention is not verified; using observation mode.');
   metrics.record({ kind: 'compatibility', session: '', score: 0, confirmed: false, chars: 0, action: compatibility.reason });
   try { ctx.logger?.info(`runtime-guard: DSH ${compatibility.version}; ${compatibility.adapter}; ${effectiveMode}; ${compatibility.reason}`); } catch { /* Optional logger. */ }
-  ctx.effect(() => async () => { disposed = true; recovery.dispose(); states.clear(); await modeSaving.catch(() => {}); await modelScope.close(); await metrics.close(); }, 'runtime-guard: stop and drain');
+  ctx.effect(() => async () => { disposed = true; recovery.dispose(); states.clear(); await modeStore.close(); await modelScope.close(); await metrics.close(); }, 'runtime-guard: stop and drain');
 }

@@ -1,13 +1,12 @@
 {
   "name": "dsh-runtime-guard",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "DSH 运行时护栏：模型防空转与工具越权审批防护插件",
   "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/MyRemme/dsh-runtime-guard",
   "repository": { "type": "git", "url": "git+https://github.com/MyRemme/dsh-runtime-guard.git" },
   "bugs": { "url": "https://github.com/MyRemme/dsh-runtime-guard/issues" },
-  "bundleDependencies": ["semver", "tar"],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -81,11 +80,11 @@
     "@deepseek-ai/dsh-agent-loop": "0.2.2-rc.1",
     "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1",
     "@types/node": "^24.0.0",
-    "@types/semver": "7.8.0",
     "esbuild": "0.28.2",
     "jsdom": "^31.0.0",
     "react": "18.2.0",
     "react-dom": "18.2.0",
+    "tar": "7.5.23",
     "typescript": "7.0.2",
     "vitest": "5.1.0"
   },
@@ -99,9 +98,5 @@
     "@deepseek-ai/dsh-tools": {
       "optional": true
     }
-  },
-  "dependencies": {
-    "semver": "7.8.6",
-    "tar": "7.5.23"
   }
 }

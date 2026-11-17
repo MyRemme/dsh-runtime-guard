@@ -31,6 +31,7 @@ async function mount(call, sessionId, services = {}, withPanel = false) {
       if (name === '@deepseek-ai/dsh-client-ui-primitives') return {
         Button: ({ icon, children, variant: _variant, size: _size, ...props }) => React.createElement('button', props, icon, children),
         Switch: ({ label, checked, onChange, disabled }) => React.createElement('button', { role: 'switch', 'aria-label': label, 'aria-checked': checked, disabled, onClick: () => onChange(!checked) }),
+        MenuSurface: React.forwardRef((props, ref) => React.createElement('div', { ...props, ref })),
       };
       throw Error('Unexpected module ' + name);
     }); } } }),
@@ -78,9 +79,9 @@ it('restores anonymous history navigation from the local catalog and does not re
   const event = { kind: 'stream-repeat', session: key, confirmed: true, time: '2026-11-16T10:00:00Z' };
   await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [item] : { ...baseline(), startedAt: '2026-11-17T10:00:00Z', events: [event] } }), undefined,
     { sessions: { list: { getSnapshot: () => ({ byId: { [id]: { title: '保存过的对话' } } }) } }, uiWorkspace: { openSession } });
-  expect(document.querySelector('.fs-conversation-title').textContent).toContain('保存过的对话');
-  expect(document.querySelector('.fs-conversation').textContent).toContain('仅保留历史记录');
-  expect(document.querySelector('.fs-toast')).toBeNull();
+  expect(document.querySelector('.rg26-conversation-title').textContent).toContain('保存过的对话');
+  expect(document.querySelector('.rg26-conversation').textContent).toContain('仅保留历史记录');
+  expect(document.querySelector('.rg26-toast')).toBeNull();
   await act(async () => { button('打开对话').click(); });
   expect(openSession).toHaveBeenCalledWith(id);
 });
@@ -105,41 +106,37 @@ it('keeps one page mounted and navigates tabs with the keyboard', async () => {
 });
 it('uses the host main surface and keeps bounded panels only in plugin configuration slots', async () => {
   const { slots } = await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : baseline() }));
-  expect(document.querySelector('.fs-mount').dataset.embedded).toBe('false');
-  expect(document.querySelector('.fs-root aside')).toBeNull();
+  expect(document.querySelector('.rg26-root').dataset.embedded).toBe('false');
+  expect(document.querySelector('.rg26-root aside')).toBeNull();
   expect(document.querySelector('[role="tablist"]').getAttribute('aria-orientation')).toBe('horizontal');
+  expect(button('全屏查看')).toBeUndefined();
   const Embedded = slots.find(slot => slot.meta.name === 'plugins.bundle.config').component;
   expect(Embedded).toBe(slots.find(slot => slot.meta.name === 'plugins.row.config').component);
   expect(Embedded).not.toBe(slots.find(slot => slot.meta.name === 'main').component);
   await act(async () => { root.render(React.createElement(Embedded)); });
-  expect(document.querySelector('.fs-mount').dataset.embedded).toBe('true');
-  await act(async () => { button('全屏查看').click(); });
-  expect(document.querySelector('[aria-modal="true"]')).not.toBeNull();
-  await act(async () => { button('退出全屏').click(); });
-  expect(document.querySelector('.fs-mount').dataset.embedded).toBe('true');
-  expect(document.querySelector('.fs-surface').parentElement).toBe(document.querySelector('.fs-mount'));
+  expect(document.querySelector('.rg26-root').dataset.embedded).toBe('true');
 });
 it('switches narrow monitor lists and opens a conversation record in the event pane', async () => {
   const items = ['a', 'b'].map(id => ({ ...sessionData(), sessionId: id, sessionKey: 'key-' + id, tracked: true }));
   const events = items.map(item => ({ kind: 'tool-repeat', session: item.sessionKey, repeats: 4 }));
   await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? items : { ...baseline(), events } }));
-  expect(document.querySelector('.fs-monitor').dataset.pane).toBe('conversations');
+  expect(document.querySelector('.rg26-monitor').dataset.pane).toBe('conversations');
   await act(async () => { button('查看此对话记录').click(); });
-  expect(document.querySelector('.fs-monitor').dataset.pane).toBe('events');
+  expect(document.querySelector('.rg26-monitor').dataset.pane).toBe('events');
   expect(button('检测记录').getAttribute('aria-pressed')).toBe('true');
-  expect(document.querySelectorAll('.fs-event')).toHaveLength(1);
+  expect(document.querySelectorAll('.rg26-event')).toHaveLength(1);
   await act(async () => { button('显示全部对话').click(); button('对话列表').click(); });
-  expect(document.querySelector('.fs-monitor').dataset.pane).toBe('conversations');
-  expect(document.querySelectorAll('.fs-event')).toHaveLength(2);
+  expect(document.querySelector('.rg26-monitor').dataset.pane).toBe('conversations');
+  expect(document.querySelectorAll('.rg26-event')).toHaveLength(2);
 });
 it('keeps open event evidence through polling and mounts a fresh page only when navigating', async () => {
   const data = { ...baseline(), events: [{ kind: 'tool-repeat', session: 'a', repeats: 4 }] };
   await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : data }));
-  const panel = document.querySelector('[role="tabpanel"]'), details = panel.querySelector('.fs-event details');
+  const panel = document.querySelector('[role="tabpanel"]'), details = panel.querySelector('.rg26-event details');
   details.open = true;
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
   expect(document.querySelector('[role="tabpanel"]')).toBe(panel);
-  expect(document.querySelector('.fs-event details')).toBe(details);
+  expect(document.querySelector('.rg26-event details')).toBe(details);
   expect(details.open).toBe(true);
   await selectTab('监控设置');
   expect(document.querySelector('[role="tabpanel"]')).not.toBe(panel);
@@ -147,55 +144,34 @@ it('keeps open event evidence through polling and mounts a fresh page only when 
   await act(async () => { tab.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })); });
   expect(document.activeElement.textContent).toBe('操作防护');
 });
-it('preserves filters and scroll across fullscreen, traps focus, restores the page and cleans up on unmount', async () => {
+it('preserves monitor filter and scroll position across polling and cleans up on unmount', async () => {
   const items = ['a', 'b'].map(id => ({ ...sessionData(), sessionId: id, sessionKey: 'key-' + id, tracked: true }));
   const event = { kind: 'tool-repeat', repeats: 4, session: 'key-a' };
   await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? items : { ...baseline(), events: [event] } }));
   await act(async () => { button('查看此对话记录').click(); });
   const scroll = document.querySelector('[aria-label="对话列表"]'); scroll.scrollTop = 42;
-  const expand = button('全屏查看');
-  await act(async () => { expand.focus(); expand.click(); });
-  expect(document.querySelector('[aria-modal="true"]')).not.toBeNull();
-  expect(document.querySelector('.fs-surface').parentElement).toBe(document.body);
-  expect(document.querySelector('#root').hasAttribute('inert')).toBe(true);
-  expect(document.body.style.overflow).toBe('hidden');
-  expect(document.activeElement).toBe(button('退出全屏'));
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
   expect(document.querySelector('[aria-label="对话列表"]')).toBe(scroll);
   expect(scroll.scrollTop).toBe(42);
   expect(button('显示全部对话')).toBeDefined();
-  const last = document.querySelector('[aria-label="检测记录"] summary');
-  await act(async () => { last.focus(); last.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true })); });
-  expect(document.activeElement).toBe(button('启用监控'));
-  await act(async () => { document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
-  expect(document.querySelector('[aria-modal="true"]')).toBeNull();
-  expect(document.activeElement).toBe(expand);
-  expect(document.body.style.overflow).toBe('');
-  expect(document.querySelector('#root').hasAttribute('inert')).toBe(false);
-  expect(scroll.scrollTop).toBe(42);
-  await act(async () => { button('全屏查看').click(); });
   await act(async () => { root.render(null); });
-  expect(document.querySelector('.fs-surface')).toBeNull();
-  expect(document.body.style.overflow).toBe('');
-  expect(document.querySelector('#root').hasAttribute('inert')).toBe(false);
+  expect(document.querySelector('.rg26-root')).toBeNull();
 });
-it('keeps unsaved model settings when entering and leaving fullscreen', async () => {
+it('keeps unsaved model settings across background polling', async () => {
   const settings = { scope: 'all', selections: [], persistent: true, availableModels: [] };
   await mount(async (_channel, method) => ({ ok: true, value: ['modelScope', 'refreshModels'].includes(method) ? settings : method === 'conversations' ? [] : baseline() }));
   await selectTab('监控设置');
-  await act(async () => { document.querySelector('input[value="selected"]').click(); button('全屏查看').click(); });
-  expect(document.querySelector('input[value="selected"]').checked).toBe(true);
-  await act(async () => { button('退出全屏').click(); });
+  await act(async () => { document.querySelector('input[value="selected"]').click(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
   expect(document.querySelector('input[value="selected"]').checked).toBe(true);
   expect(button('保存监控范围').disabled).toBe(false);
 });
-it('removes a fullscreen surface when the host changes the panel into a summary', async () => {
+it('renders compact summary view without controls when requested', async () => {
   const { slots } = await mount(async () => ({ ok: true, value: baseline() }));
-  await act(async () => { button('全屏查看').click(); });
   const Panel = slots.find(s => s.meta.name === 'main').component;
   await act(async () => { root.render(React.createElement(Panel, { view: 'summary' })); });
-  expect(document.querySelector('.fs-surface')).toBeNull();
-  expect(document.body.style.overflow).toBe('');
-  expect(document.querySelector('#root').hasAttribute('inert')).toBe(false);
+  expect(document.querySelector('.rg26-summary')?.textContent).toContain('已监控 3 次');
+  expect(document.querySelector('.rg26-root')).toBeNull();
 });
 it('shows independent operation protection, persists its toggle and reports unavailable protection', async () => {
   let safety = { enabled: false, state: 'disabled', reason: null, hostVersion: '0.2.2-rc.1', persistent: true,
@@ -328,11 +304,14 @@ it('links to the repository and exposes persistent automatic and manual update c
   await act(async () => { button('检查更新').click(); }); expect(call).toHaveBeenCalledWith('/runtime-guard', 'checkUpdates', {}, expect.anything());
   await act(async () => { button('安装更新').click(); }); expect(document.body.textContent).toContain('等待所有对话空闲后安装');
 });
-it('highlights the current up-to-date update status in green', async () => {
+it('highlights the current up-to-date update status in green and handles prerelease comparisons', async () => {
   const update = { repository: 'https://github.com/MyRemme/dsh-runtime-guard', currentVersion: '0.2.5', latestVersion: '0.2.5', available: true, automatic: false, phase: 'current' };
   await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : method === 'updates' ? update : baseline() }));
   await selectTab('插件更新');
-  expect(document.querySelector('.fs-success')?.textContent).toBe('已是最新正式版');
+  expect(document.querySelector('.rg26-success')?.textContent).toBe('已是最新正式版');
+  update.currentVersion = '0.2.7-beta.1';
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+  expect(document.querySelector('.rg26-success')?.textContent).toBe('当前版本高于最新正式版');
 });
 it('registers discoverable native entries and renders actual monitoring state with working controls', async () => {
   const data = baseline();
@@ -368,8 +347,8 @@ it('identifies conversations and turns, filters incidents and opens the native c
   expect(document.body.textContent).toContain('第 7 轮 · 步骤 3');
   expect(document.body.textContent).toContain('窗口覆盖 98%');
   await act(async () => { button('查看此对话记录').click(); });
-  expect(document.querySelectorAll('.fs-event')).toHaveLength(1);
-  expect(document.querySelector('.fs-event').textContent).toContain('合成迁移任务');
+  expect(document.querySelectorAll('.rg26-event')).toHaveLength(1);
+  expect(document.querySelector('.rg26-event').textContent).toContain('合成迁移任务');
   await act(async () => { button('打开对话').click(); });
   expect(openSession).toHaveBeenCalledWith('a');
   vi.spyOn(dom.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
@@ -382,17 +361,17 @@ it('updates live health from flowing output to suspicion and confirmation, witho
   const data = { ...sessionData(), coverage: 'monitoring', live, toolResults: 3 };
   await mount(async (_channel, method) => ({ ok: true, value: method === 'session' ? structuredClone(data) : baseline() }), 'a');
   expect(document.body.textContent).toContain('持续检测 · 暂未发现循环');
-  await act(async () => { document.querySelector('.fs-dock-button').click(); });
+  await act(async () => { document.querySelector('.rg26-dock-button').click(); });
   expect(document.body.textContent).toContain('推理 5,800 字符');
   expect(document.body.textContent).toContain('已检查 12 次');
   expect(document.body.textContent).toContain('工具结果 3 次');
   expect(document.body.textContent).toContain('不能保证后续不会重复');
   data.live.risk = 'suspected';
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-  expect(document.querySelector('.fs-dock-button').textContent).toContain('疑似重复');
+  expect(document.querySelector('.rg26-dock-button').textContent).toContain('疑似重复');
   data.live.risk = 'confirmed';
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-  expect(document.querySelector('.fs-dock-button').textContent).toContain('确认重复 · 未中断');
+  expect(document.querySelector('.rg26-dock-button').textContent).toContain('确认重复 · 未中断');
 });
 it.each([
   [{ risk: 'collecting', active: true, reasoningChars: 15, textChars: 0, checks: 0, silentForMs: 100 }, '接收输出 · 积累检测样本'],
@@ -404,14 +383,14 @@ it.each([
   [{ risk: 'confirmed', incomplete: true, incompleteReason: 'monitor-error', active: true, reasoningChars: 4000, textChars: 0, checks: 3, silentForMs: 0 }, '检测异常 · 仅传递输出'],
 ])('labels incomplete observations honestly: %s', async (live, label) => {
   await mount(async (_channel, method) => ({ ok: true, value: method === 'session' ? { ...sessionData(), coverage: live.active ? 'monitoring' : 'checked', live } : baseline() }), 'a');
-  expect(document.querySelector('.fs-dock-button').textContent).toContain(label);
+  expect(document.querySelector('.rg26-dock-button').textContent).toContain(label);
 });
 it('notifies monitoring failures with scoped details instead of showing a healthy request', async () => {
   const event = { kind: 'internal-error', action: 'type-error', session: 'hashed', turn: 4, step: 2, time: '2026-11-13T00:00:00Z' };
   await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : { ...baseline(), events: [event] } }));
   expect(document.querySelector('[role="alert"]').textContent).toContain('监控异常');
   expect(document.querySelector('[role="alert"]').textContent).toContain('当前检测可能不完整');
-  expect(document.querySelector('.fs-event').textContent).toContain('第 4 轮 · 步骤 2');
+  expect(document.querySelector('.rg26-event').textContent).toContain('第 4 轮 · 步骤 2');
 });
 it('shows and opens real incident alerts and exports only the host diagnostic payload', async () => {
   const data = baseline();
@@ -445,15 +424,15 @@ it.each(['snapshot', 'conversations'])('does not show stale live health after %s
     if (fail && method === endpoint) throw Error('offline');
     return { ok: true, value: method === 'conversations' ? [item] : baseline() };
   });
-  expect(document.querySelector('.fs-conversation .fs-state').textContent).toContain('暂未发现循环');
+  expect(document.querySelector('.rg26-conversation .rg26-state').textContent).toContain('暂未发现循环');
   fail = true;
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-  expect(document.querySelector('.fs-conversation .fs-state').textContent).toContain('状态已过期');
-  expect(document.querySelector('.fs-conversation .fs-state').dataset.tone).toBe('off');
+  expect(document.querySelector('.rg26-conversation .rg26-state').textContent).toContain('状态已过期');
+  expect(document.querySelector('.rg26-conversation .rg26-state').dataset.tone).toBe('off');
   expect(document.body.textContent).toContain('以下为上次同步数据');
   fail = false;
   await act(async () => { button('刷新状态').click(); });
-  expect(document.querySelector('.fs-conversation .fs-state').textContent).toContain('暂未发现循环');
+  expect(document.querySelector('.rg26-conversation .rg26-state').textContent).toContain('暂未发现循环');
   expect(document.body.textContent).not.toContain('以下为上次同步数据');
 });
 it('rejects a stale polling response after pause so the screen stays paused', async () => {
@@ -488,7 +467,7 @@ it.each(['snapshot', 'conversations', 'session'].flatMap(endpoint => ['response'
   expect(polls).toBe(3);
   await act(async () => { fresh.resolve({ ok: true, value: value(endpoint) }); });
   expect(button('启用监控').getAttribute('aria-checked')).toBe('false');
-  expect(document.querySelector('.fs-dock-button').textContent).toContain('监控已暂停');
+  expect(document.querySelector('.rg26-dock-button').textContent).toContain('监控已暂停');
   expect(document.body.textContent).not.toMatch(/监控服务未连接|会话监控未连接|对话列表未连接/);
 });
 const sessionData = () => ({ monitoring: true, mode: 'observe', coverage: 'checked', monitoredRequests: 2,
@@ -501,7 +480,7 @@ it('shows a scoped status in each conversation and explains evidence without cla
   const call = vi.fn(async (_channel, method, payload) => ({ ok: true, value: method === 'session' ? (payload.sessionId === 'a' ? current : sessionData()) : baseline() }));
   const { slots } = await mount(call, 'a');
   expect(document.body.textContent).toContain('确认重复 · 未中断');
-  await act(async () => { document.querySelector('.fs-dock-button').click(); });
+  await act(async () => { document.querySelector('.rg26-dock-button').click(); });
   const dialog = document.querySelector('[role="dialog"]');
   expect(dialog.textContent).toContain('周期 21 字符、重复 64 次');
   expect(dialog.textContent).toContain('第 3 轮 · 步骤 2');
@@ -528,7 +507,7 @@ it('shows tool observations and deferred corrections as distinct actions, with d
   data.latestEvent = data.events[0];
   await mount(async (_channel, method) => ({ ok: true, value: method === 'session' ? data : baseline() }), 'a');
   expect(document.body.textContent).toContain('等待纠正');
-  await act(async () => { document.querySelector('.fs-dock-button').click(); });
+  await act(async () => { document.querySelector('.rg26-dock-button').click(); });
   expect(document.body.textContent).toContain('当前回合结束后提交纠正；本次输出未中断');
   expect(document.body.textContent).toContain('未阻止、跳过或重放任何工具');
   await act(async () => { document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
@@ -539,15 +518,15 @@ it('explains intermittent phrase evidence and distinguishes requested from confi
   const data = { ...sessionData(), coverage: 'unavailable', mode: 'guard', cancelRequested: 1, events: [{ kind: 'recovery', action: 'cancel-requested' }, phrase] };
   data.latestEvent = data.events[0];
   await mount(async (_channel, method) => ({ ok: true, value: method === 'session' ? structuredClone(data) : baseline() }), 'a');
-  expect(document.querySelector('.fs-dock-button').textContent).toContain('已请求中断');
-  await act(async () => { document.querySelector('.fs-dock-button').click(); });
+  expect(document.querySelector('.rg26-dock-button').textContent).toContain('已请求中断');
+  await act(async () => { document.querySelector('.rg26-dock-button').click(); });
   expect(document.body.textContent).toContain('夹杂变化文字的短句反复出现');
   expect(document.body.textContent).toContain('短句单元占比 80%');
   expect(document.body.textContent).toContain('防护停止');
   expect(document.body.textContent).not.toContain('周期 0');
   data.latestEvent = { kind: 'recovery', action: 'stop-confirmed' };
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-  expect(document.querySelector('.fs-dock-button').textContent).toContain('已停止重复生成');
+  expect(document.querySelector('.rg26-dock-button').textContent).toContain('已停止重复生成');
   expect(document.querySelector('[role="dialog"]').textContent).toContain('宿主已确认停止');
   expect(document.querySelector('[role="dialog"]').textContent).not.toContain('需以宿主结果为准');
 });
@@ -557,13 +536,13 @@ it.each([
 ])('retains the actual conclusion after an interrupted confirmed %s request', async (mode, latestEvent, label) => {
   const data = { ...sessionData(), mode, coverage: 'unavailable', latestEvent, live: { risk: 'confirmed', active: false } };
   await mount(async (_channel, method) => ({ ok: true, value: method === 'session' ? data : baseline() }), 'a');
-  expect(document.querySelector('.fs-dock-button').textContent).toContain(label);
-  expect(document.querySelector('.fs-dock-button').textContent).not.toContain('检测不完整');
+  expect(document.querySelector('.rg26-dock-button').textContent).toContain(label);
+  expect(document.querySelector('.rg26-dock-button').textContent).not.toContain('检测不完整');
 });
 it('keeps a monitor failure visible even when an earlier recovery event is retained', async () => {
   const data = { ...sessionData(), coverage: 'unavailable', latestEvent: { kind: 'recovery', action: 'correction-revoked' }, live: { risk: 'confirmed', incomplete: true, incompleteReason: 'monitor-error' } };
   await mount(async (_channel, method) => ({ ok: true, value: method === 'session' ? data : baseline() }), 'a');
-  expect(document.querySelector('.fs-dock-button').textContent).toContain('检测异常');
+  expect(document.querySelector('.rg26-dock-button').textContent).toContain('检测异常');
 });
 it.each(['changing-numbered-units', 'changing-units'])('notifies %s without claiming a confirmed loop or interruption', async uncertainty => {
   const event = { kind: 'stream-repeat', method: 'phrase', uncertainty, action: 'notify-only', contentType: 'reasoning', confirmed: false, repeats: 90, time: '2026-11-12T12:00:00Z' };
@@ -571,7 +550,7 @@ it.each(['changing-numbered-units', 'changing-units'])('notifies %s without clai
   await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : data }));
   expect(document.querySelector('[role="alert"]').textContent).toContain('重复特征待确认');
   expect(document.querySelector('[role="alert"]').textContent).toContain('未自动停止或提交纠正');
-  expect(document.querySelector('.fs-event-title').textContent).toBe('重复特征待确认');
+  expect(document.querySelector('.rg26-event-title').textContent).toBe('重复特征待确认');
   expect(document.body.textContent).toContain(uncertainty === 'changing-units' ? '对象或内容仍在变化' : '变化编号');
 });
 it('shows the current request while keeping earlier incidents in conversation details', async () => {
@@ -579,7 +558,7 @@ it('shows the current request while keeping earlier incidents in conversation de
     events: [{ kind: 'stream-repeat', confirmed: true, time: '2026-11-11T11:01:00Z' }] };
   await mount(async (_channel, method) => ({ ok: true, value: method === 'session' ? data : baseline() }), 'a');
   expect(document.body.textContent).toContain('正在监控');
-  await act(async () => { document.querySelector('.fs-dock-button').click(); });
+  await act(async () => { document.querySelector('.rg26-dock-button').click(); });
   expect(document.querySelector('[role="dialog"]').textContent).toContain('确认输出重复');
 });
 it('switches mode, toggles per-session monitoring, alerts on tool-repeat, and pauses polling when hidden', async () => {
@@ -599,6 +578,7 @@ it('switches mode, toggles per-session monitoring, alerts on tool-repeat, and pa
     return { ok: true, value: structuredClone(data) };
   });
   await mount(call, 'a', {}, true);
+  expect(call.mock.calls.some(([, method]) => ['updates', 'modelScope', 'diskLogging'].includes(method))).toBe(false);
   await selectTab('监控设置');
   await act(async () => { document.querySelector('input[name="flash-mode"][value="guard"]').click(); });
   expect(call).toHaveBeenCalledWith('/runtime-guard', 'setMode', { mode: 'guard' }, expect.any(AbortSignal));
@@ -618,6 +598,7 @@ it('switches mode, toggles per-session monitoring, alerts on tool-repeat, and pa
   await act(async () => { document.dispatchEvent(new dom.window.Event('visibilitychange')); });
   expect(snapshotCalls).toBeGreaterThan(beforeHidden);
   expect(document.querySelector('[role="alert"]').textContent).toContain('工具重复告警');
+  expect(call.mock.calls.some(([, method]) => method === 'updates')).toBe(false);
 });
 it('shows clear version diagnostic messages for guard unavailability and host-unverified safety blocks', async () => {
   const data = {

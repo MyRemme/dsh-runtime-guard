@@ -43,3 +43,86 @@ export async function writeProfileFile(file: string, content: string): Promise<v
     }
   } finally { await unlink(temporary).catch(() => {}); }
 }
+
+/** Serializes async file writes so concurrent toggles never overwrite newer state with older state. */
+export class SerializedQueue {
+  private tail: Promise<unknown> = Promise.resolve();
+  run<R>(task: () => Promise<R>): Promise<R> {
+    const op = this.tail.catch(() => {}).then(task);
+    this.tail = op;
+    return op;
+  }
+  async drain(): Promise<void> {
+    await this.tail.catch(() => {});
+  }
+}
+
+export interface ProfileStoreOptions<T> {
+  directory?: string | undefined;
+  file?: string | undefined;
+  subpath?: string[];
+  maxBytes?: number;
+  defaultValue: T;
+  parse: (raw: unknown) => T | undefined;
+  serialize?: (value: T) => string;
+  onLoadError?: () => T;
+  disposedMessage?: string;
+}
+
+/** Unified bounded JSON settings store with legacy migration and serialized atomic writes. */
+export class ProfileJsonStore<T> {
+  readonly file: string | undefined;
+  readonly queue = new SerializedQueue();
+  value: T;
+  loadError = false;
+  disposed = false;
+  private readonly serialize: (value: T) => string;
+  private readonly disposedMessage: string;
+
+  constructor(options: ProfileStoreOptions<T>) {
+    this.value = options.defaultValue;
+    this.serialize = options.serialize ?? (v => JSON.stringify(v, null, 2) + '\n');
+    this.disposedMessage = options.disposedMessage ?? 'settings unavailable';
+    if (options.file) {
+      this.file = options.file;
+      return;
+    }
+    if (!options.directory || !options.subpath) return;
+    this.file = join(options.directory, PROFILE_DIR, ...options.subpath);
+    try {
+      const saved = readProfileJsonSync(options.directory, options.maxBytes ?? 4096, ...options.subpath);
+      if (saved !== undefined) {
+        const parsed = options.parse(saved);
+        if (parsed === undefined) throw new Error('invalid settings');
+        this.value = parsed;
+      }
+    } catch {
+      this.loadError = true;
+      if (options.onLoadError) this.value = options.onLoadError();
+    }
+  }
+
+  get persistent(): boolean { return Boolean(this.file); }
+
+  update<R = T>(
+    next: T,
+    options?: {
+      beforeWrite?: () => void;
+      afterWrite?: (value: T) => Promise<R> | R;
+    },
+  ): Promise<R> {
+    return this.queue.run(async () => {
+      if (this.disposed) throw new Error(this.disposedMessage);
+      options?.beforeWrite?.();
+      if (this.file) await writeProfileFile(this.file, this.serialize(next));
+      this.value = next;
+      this.loadError = false;
+      return options?.afterWrite ? await options.afterWrite(next) : (next as unknown as R);
+    });
+  }
+
+  async close(): Promise<void> {
+    this.disposed = true;
+    await this.queue.drain();
+  }
+}

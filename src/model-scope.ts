@@ -1,5 +1,4 @@
-import { join } from 'node:path';
-import { PROFILE_DIR, readProfileJsonSync, writeProfileFile } from './profile-file.js';
+import { ProfileJsonStore } from './profile-file.js';
 
 export interface ModelSelection { provider?: string; model: string }
 export interface ModelScopeSettings { scope: 'all' | 'selected'; selections: ModelSelection[] }
@@ -22,36 +21,33 @@ export function validateSelections(value: unknown): ModelSelection[] {
   }
   return [...unique.values()];
 }
-export function validateModelScope(value: unknown): ModelScopeSettings {
+export function validateModelScope(value: unknown, strict = true): ModelScopeSettings {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('invalid model scope');
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).length !== 2 || !Object.hasOwn(input, 'scope') || !Object.hasOwn(input, 'selections')
-    || !['all', 'selected'].includes(input.scope as string)) throw new TypeError('invalid model scope');
+  if ((strict && Object.keys(input).length !== 2) || !['all', 'selected'].includes(input.scope as string)) {
+    throw new TypeError('invalid model scope');
+  }
   return { scope: input.scope as ModelScopeSettings['scope'], selections: validateSelections(input.selections) };
 }
 
 /** Route names stay in the authenticated settings endpoint and local profile. */
 export class ModelScopeStore {
-  private current: ModelScopeSettings;
-  private file: string | undefined;
-  private saved: Promise<unknown> = Promise.resolve();
-  private disposed = false;
-  private loadError = false;
+  private readonly store: ProfileJsonStore<ModelScopeSettings>;
   private catalogError = false;
   private options = new Map<string, ModelOption>();
   private refreshing: Promise<ReturnType<ModelScopeStore['view']>> | undefined;
   constructor(initial: ModelScopeSettings, directory: string | undefined, private readonly changed: () => void) {
-    this.current = validateModelScope(initial);
-    if (!directory) return;
-    this.file = join(directory, PROFILE_DIR, 'model-scope.json');
-    try {
-      const saved = readProfileJsonSync(directory, 4_194_304, 'model-scope.json');
-      if (saved !== undefined) this.current = validateModelScope(saved);
-    } catch { this.loadError = true; }
+    this.store = new ProfileJsonStore<ModelScopeSettings>({
+      directory,
+      subpath: ['model-scope.json'],
+      maxBytes: 4_194_304,
+      defaultValue: validateModelScope(initial),
+      parse: raw => validateModelScope(raw, false),
+    });
   }
   matches(route: { model?: unknown; provider?: unknown }): boolean {
-    if (this.current.scope === 'all') return true;
-    return typeof route.model === 'string' && this.current.selections.some(item =>
+    if (this.store.value.scope === 'all') return true;
+    return typeof route.model === 'string' && this.store.value.selections.some(item =>
       item.model === route.model && (item.provider === undefined || item.provider === route.provider));
   }
   remember(route: { model?: unknown; provider?: unknown }, label?: string, providerLabel?: string): void {
@@ -62,29 +58,24 @@ export class ModelScopeStore {
     this.options.set(id, { ...value, label: validId(label) ? label : value.model,
       providerLabel: validId(providerLabel) ? providerLabel : value.provider });
   }
-  summary() { return { scope: this.current.scope, selectedCount: this.current.selections.length }; }
+  summary() { return { scope: this.store.value.scope, selectedCount: this.store.value.selections.length }; }
   view() {
     const available = new Map(this.options);
-    for (const item of this.current.selections) if (!available.has(key(item))) available.set(key(item), {
+    for (const item of this.store.value.selections) if (!available.has(key(item))) available.set(key(item), {
       ...item, label: item.model, providerLabel: item.provider ?? '任意渠道（配置项）',
     });
-    return { ...this.summary(), selections: this.current.selections.map(item => ({ ...item })),
+    return { ...this.summary(), selections: this.store.value.selections.map(item => ({ ...item })),
       availableModels: [...available.values()].map(item => ({ ...item })),
-      persistent: !!this.file, loadError: this.loadError, catalogError: this.catalogError };
+      persistent: this.store.persistent, loadError: this.store.loadError, catalogError: this.catalogError };
   }
   set(input: unknown): Promise<ReturnType<ModelScopeStore['view']>> {
     const next = validateModelScope(input);
-    const operation = this.saved.catch(() => {}).then(async () => {
-      if (this.disposed) throw new Error('settings unavailable');
-      if (this.file) {
-        await writeProfileFile(this.file, JSON.stringify(next, null, 2) + '\n');
-      }
-      this.current = next; this.loadError = false;
-      if (!this.disposed) this.changed();
-      return this.view();
+    return this.store.update(next, {
+      afterWrite: () => {
+        if (!this.store.disposed) this.changed();
+        return this.view();
+      },
     });
-    this.saved = operation;
-    return operation;
   }
   refresh(catalog?: ModelCatalog): Promise<ReturnType<ModelScopeStore['view']>> {
     if (this.refreshing) return this.refreshing;
@@ -99,7 +90,7 @@ export class ModelScopeStore {
             const models = await Promise.race([catalog.listModels!(provider.id), new Promise<never>((_, reject) => {
               timer = setTimeout(() => reject(new Error('catalog unavailable')), 5000);
             })]);
-            if (!this.disposed) for (const model of models.slice(0, 1024)) this.remember({ provider: provider.id, model: model.id }, model.name, provider.name);
+            if (!this.store.disposed) for (const model of models.slice(0, 1024)) this.remember({ provider: provider.id, model: model.id }, model.name, provider.name);
           } finally { clearTimeout(timer); }
         }));
         this.catalogError = results.some(result => result.status === 'rejected');
@@ -108,5 +99,5 @@ export class ModelScopeStore {
     })().finally(() => { this.refreshing = undefined; });
     return this.refreshing;
   }
-  async close(): Promise<void> { this.disposed = true; await this.saved.catch(() => {}); }
+  close(): Promise<void> { return this.store.close(); }
 }

@@ -177,7 +177,8 @@ describe('repeat evidence', () => {
     const filter = new FenceFilter();
     const emitted: string[] = [];
     filter.push('ordinary text\n'.repeat(10000), text => { emitted.push(text); return emitted.length < 3; }, () => {});
-    expect(emitted.join('')).toBe('ord');
+    expect(emitted).toHaveLength(3);
+    expect(emitted.join('')).toBe('ordinary text\n'.repeat(3));
   });
   it.each(['好。', '哈。', 'a!', '𐐀!'])('confirms sustained single-letter reasoning sentences: %s', unit => {
     for (const size of [1, 7, 73, 4096]) {

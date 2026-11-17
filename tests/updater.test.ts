@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { create } from 'tar';
 import { manifestCandidate, releaseCandidate, Updater, validateArchive } from '../src/updater.js';
+import { gtVersion, satisfiesRange, validVersion } from '../src/semver.js';
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -403,4 +404,27 @@ it('schedules checks every six hours only when automatic updates are enabled', a
   await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000 - 15000); expect(transport).toHaveBeenCalledTimes(count);
   await vi.advanceTimersByTimeAsync(15000); expect(transport).toHaveBeenCalledTimes(count + 1);
   await updater.setAutomatic(false); await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000); expect(transport).toHaveBeenCalledTimes(count + 1);
+});
+it('validates semver ranges, prereleases and PAX long archive paths without external deps', async () => {
+  expect(validVersion('v0.2.7-beta.1+build.4')).toBe('0.2.7-beta.1');
+  expect(validVersion('^1.0.0')).toBeNull();
+  expect(gtVersion('0.2.7', '0.2.7-beta.1')).toBe(true);
+  expect(satisfiesRange('0.2.2-rc.1', '0.2.2-rc.1 || 0.2.1-rc.2')).toBe(true);
+  expect(satisfiesRange('0.2.2-rc.1', '>=0.2.0')).toBe(false);
+  expect(satisfiesRange('22.18.0', '>=22.18.0')).toBe(true);
+  expect(satisfiesRange('24.1.0', '^24.0.0')).toBe(true);
+
+  const dir = await mkdtemp(join(tmpdir(), 'flash-update-pax-')); roots.push(dir);
+  const pkgRoot = join(dir, 'package');
+  const longDir = join(pkgRoot, 'node_modules', 'nested-pkg', 'a'.repeat(60), 'b'.repeat(60));
+  await mkdir(join(pkgRoot, 'dist'), { recursive: true });
+  await mkdir(join(pkgRoot, 'client'));
+  await mkdir(longDir, { recursive: true });
+  await writeFile(join(pkgRoot, 'package.json'), JSON.stringify({ name: 'dsh-runtime-guard', version: '0.1.8', engines: { node: '>=22.18.0', dsh: '0.2.1-rc.2' } }));
+  await writeFile(join(pkgRoot, 'dist/index.js'), 'export const name="test";');
+  await writeFile(join(pkgRoot, 'client/client.js'), '/* fixture */');
+  await writeFile(join(pkgRoot, 'cordis.patch.yml'), '[]');
+  await writeFile(join(longDir, 'extra.txt'), 'ok');
+  const paxArchive = join(dir, 'pax.tgz'); await create({ cwd: dir, file: paxArchive, gzip: true }, ['package']);
+  await validateArchive(paxArchive, '0.1.8', '0.2.1-rc.2');
 });
