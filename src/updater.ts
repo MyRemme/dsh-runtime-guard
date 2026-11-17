@@ -3,14 +3,19 @@ import { readFile, mkdir, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { HostContext } from './types.js';
 import { PROFILE_DIR, SerializedQueue, writeProfileFile } from './profile-file.js';
 import { gtVersion, satisfiesRange, validVersion } from './semver.js';
 import { parseTar } from './tar.js';
+import { prepareUpgradeEnvironment, UpgradeEnvironmentError } from './upgrade-environment.js';
 
 export const REPOSITORY = 'https://github.com/MyRemme/dsh-runtime-guard';
 const API = 'https://api.github.com/repos/MyRemme/dsh-runtime-guard';
-const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string; version: string };
+declare const UPGRADE_MANIFEST: { name: string; version: string } | undefined;
+const manifest = typeof UPGRADE_MANIFEST === 'undefined'
+  ? JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string; version: string }
+  : UPGRADE_MANIFEST;
 const MAX_ARCHIVE = 32 * 1024 * 1024;
 const INTERVAL = 6 * 60 * 60 * 1000;
 const CHECK_CACHE = 60 * 1000;
@@ -31,7 +36,7 @@ export interface UpdateAPI {
 }
 export interface Manager {
   installBundle(spec: string, options?: { enabled?: boolean; requestId?: string }): Promise<{
-    application: string; version?: string;
+    application: string; version?: string; stage?: string;
     error?: { code: string };
     packageResult?: { output: string; kind?: string };
   }>;
@@ -82,7 +87,7 @@ export function manifestCandidate(value: unknown, current: string): Candidate | 
 }
 
 /** Inspect every entry before pnpm sees it; no links, traversal or install scripts. */
-export async function validateArchive(file: string, version: string, hostVersion: string): Promise<void> {
+export async function validateArchive(file: string, version: string, hostVersion: string, requireUnified = false): Promise<void> {
   const uncompressed = gunzipSync(await readFile(file), { maxOutputLength: 64 * 1024 * 1024 });
   let entries;
   try { entries = parseTar(uncompressed); } catch { return failure('invalid-archive'); }
@@ -112,9 +117,10 @@ export async function validateArchive(file: string, version: string, hostVersion
     return failure('invalid-archive');
   }
 
-  let pkg: { name: string; version: string; scripts?: Record<string, unknown>; engines?: { node?: string; dsh?: string }; dependencies?: Record<string, string> };
+  let pkg: { name: string; version: string; runtimeGuardUpdater?: number; scripts?: Record<string, unknown>; engines?: { node?: string; dsh?: string }; dependencies?: Record<string, string> };
   try { pkg = JSON.parse(rootManifest.toString()); } catch { return failure('invalid-archive'); }
   if (!pkg || pkg.name !== manifest.name || pkg.version !== version) return failure('invalid-archive');
+  if (requireUnified && pkg.runtimeGuardUpdater !== 1) return failure('legacy-update-package');
 
   const installKeys = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
   if (installKeys.some(key => pkg.scripts?.[key])) return failure('install-scripts');
@@ -146,6 +152,8 @@ export class Updater implements UpdateAPI {
     directory: string; hostVersion: string; manager: Manager; idle: () => boolean;
     fetch?: typeof fetch;
     currentVersion?: string; schedule?: boolean;
+    repairCurrent?: boolean;
+    requireUnified?: boolean;
   }) {
     this.directory = join(options.directory, PROFILE_DIR, 'updates');
     this.state = { repository: REPOSITORY, currentVersion: options.currentVersion ?? manifest.version, available: true, automatic: false,
@@ -158,6 +166,13 @@ export class Updater implements UpdateAPI {
       this.state.updatedAt = typeof saved.updatedAt === 'string' ? saved.updatedAt : null;
       if (saved.phase === 'restart-required' && saved.latestVersion && validVersion(saved.latestVersion) && gtVersion(saved.latestVersion, this.state.currentVersion)) {
         this.state.phase = 'restart-required'; this.state.latestVersion = saved.latestVersion;
+      } else if (['installing', 'restart-required'].includes(saved.phase ?? '') && saved.latestVersion === this.state.currentVersion) {
+        // A self-update can dispose the old updater before its install promise resolves.
+        // The new process confirms activation from its own package version, not the old promise.
+        this.state.phase = 'current'; this.state.latestVersion = saved.latestVersion;
+        this.state.checkedAt = typeof saved.checkedAt === 'string' ? saved.checkedAt : null;
+        this.state.updatedAt = new Date().toISOString();
+        await this.save();
       }
     } catch { /* First installation or invalid state starts with automatic updates off. */ }
     if (this.disposed || this.options.schedule === false) return;
@@ -239,12 +254,14 @@ export class Updater implements UpdateAPI {
     return Buffer.concat(parts);
   }
   private async latest(): Promise<{ candidate: Candidate | null; version: string }> {
+    const current = (version: string) => this.options.repairCurrent && validVersion(version) === validVersion(this.state.currentVersion)
+      ? '0.0.0' : this.state.currentVersion;
     // The published stable feed is independent of the REST API's shared IP quota.
     // Keep the API for old releases and networks that cannot reach github.com.
     try {
       const body = await this.request(PUBLIC_MANIFEST, 16 * 1024);
       const data = JSON.parse(body.toString());
-      return { candidate: manifestCandidate(data, this.state.currentVersion), version: data.version };
+      return { candidate: manifestCandidate(data, current(data.version)), version: data.version };
     } catch (error) {
       if (this.abort.signal.aborted) throw error;
       if (error instanceof UpdateFailure && !RETRYABLE_NETWORK_ERRORS.has(error.message)) throw error;
@@ -254,7 +271,7 @@ export class Updater implements UpdateAPI {
     const body = await this.request(`${API}/releases/latest`, 1024 * 1024);
     let data: { tag_name?: string };
     try { data = JSON.parse(body.toString()); } catch { return failure('invalid-release'); }
-    const candidate = releaseCandidate(data, this.state.currentVersion);
+    const candidate = releaseCandidate(data, current(data.tag_name?.replace(/^v/, '') ?? ''));
     return { candidate, version: data.tag_name!.replace(/^v/, '') };
   }
   check(): Promise<UpdateStatus> {
@@ -356,7 +373,7 @@ export class Updater implements UpdateAPI {
     await mkdir(this.directory, { recursive: true }); active();
     const file = join(this.directory, `${manifest.name}-${candidate.version}-${hash.slice(0, 12)}.tgz`);
     await writeFile(file, archive, { mode: 0o600 }); active();
-    await validateArchive(file, candidate.version, this.options.hostVersion); active();
+    await validateArchive(file, candidate.version, this.options.hostVersion, this.options.requireUnified); active();
     this.prepared = { candidate, file, hash };
     return file;
   }
@@ -373,11 +390,23 @@ export class Updater implements UpdateAPI {
       const file = await this.prepareArchive(candidate, task, active);
       if (await yieldIfBusy()) return;
       this.state.phase = 'installing'; await this.save();
+      await prepareUpgradeEnvironment(this.options.directory, AbortSignal.any([this.abort.signal, task.abort.signal]));
       if (await yieldIfBusy()) return;
       // Cancellation is effective until this synchronous handoff. The host owns
       // an installation already submitted, including plugin disposal during HMR.
       task.submitted = true;
-      const result = await this.options.manager.installBundle(file, { enabled: true, requestId: `${manifest.name}-${randomUUID()}` });
+      let result: Awaited<ReturnType<Manager['installBundle']>>;
+      for (let attempt = 0; ; attempt++) {
+        result = await this.options.manager.installBundle(file, { enabled: true, requestId: `${manifest.name}-${randomUUID()}` });
+        const transientRename = process.platform === 'win32' && result.application === 'failed' && result.stage === 'install'
+          && /\bEPERM\b/.test(result.packageResult?.output ?? '') && /\brename\b[^\n]*package\.json/i.test(result.packageResult?.output ?? '');
+        if (!transientRename || attempt >= 2 || this.disposed) break;
+        // Native DSH has restored its manifest/lockfile after this failed run.
+        // Retry only a Windows rename lock, with the same verified archive and idle gate.
+        await delay(250 * (attempt + 1), undefined, { signal: this.abort.signal });
+        if (await yieldIfBusy()) return;
+        await this.prepareArchive(candidate, task, active);
+      }
       if (!['applied', 'restart-required'].includes(result.application)) return failure(hostInstallFailure(result));
       if (result.version !== candidate.version) return failure('host-version-mismatch');
       const finished: UpdateStatus = {
@@ -395,7 +424,7 @@ export class Updater implements UpdateAPI {
       if (this.installing === task) this.installing = null;
       if (task.abort.signal.aborted && !task.submitted) {
         if (this.state.error !== 'storage-failed') { this.state.phase = 'available'; this.state.error = null; }
-      } else { this.pending = null; this.state.phase = 'error'; this.state.error = error instanceof UpdateFailure ? error.message : 'update-install-failed'; }
+      } else { this.pending = null; this.state.phase = 'error'; this.state.error = error instanceof UpdateFailure || error instanceof UpgradeEnvironmentError ? error.message : 'update-install-failed'; }
       await this.save().catch(() => {});
     }
   }
@@ -411,7 +440,7 @@ export function registerUpdater(ctx: HostContext, hostVersion: string, idle: () 
     const profile = child.get?.('profileContext') as { dir?: string } | undefined;
     if (!manager?.installBundle || !profile?.dir) return;
     const hmr = child.get?.('hmr') as { executing?: { exit<T>(callback: () => T): T } } | undefined;
-    const own = new Updater({ directory: profile.dir, hostVersion, manager: {
+    const own = new Updater({ directory: profile.dir, hostVersion, requireUnified: true, manager: {
       installBundle: (spec, options) => hmr?.executing ? hmr.executing.exit(() => manager.installBundle(spec, options)) : manager.installBundle(spec, options),
     }, idle });
     updater = own;

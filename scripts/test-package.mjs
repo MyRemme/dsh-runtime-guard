@@ -18,6 +18,8 @@ assert.ok(listing.length > 0);
 assert.ok(listing.every(p => p.startsWith('package/') && !p.split('/').includes('..') && !p.includes('\\')), 'safe archive paths');
 for (const required of ['package/dist/index.js', 'package/client/client.js', 'package/cordis.patch.yml', 'package/README.md', 'package/compatibility/releases.json']) assert.ok(listing.includes(required), required);
 assert.ok(listing.includes(`package/dist/runtime-${manifest.version}.js`), 'release-specific runtime entry');
+assert.equal(manifest.runtimeGuardUpdater, 1, 'unified updater protocol');
+assert.ok(listing.includes('package/dist/upgrade-helper.mjs'), 'standalone legacy upgrade helper');
 assert.ok(!listing.some(p => /(?:^|\/)(?:\.npm-cache|\.compat-cache)(?:\/|$)/.test(p)), 'no development caches');
 assert.ok(!listing.some(p => p.startsWith('package/node_modules/')), 'no bundled node_modules');
 const results = []; let cursor = 0;

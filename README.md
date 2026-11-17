@@ -109,6 +109,16 @@ npm pack --ignore-scripts
 
 更新分为检查版本、下载校验、交给 DSH 安装依赖三个阶段。下载成功不代表安装成功；安装失败后仍显示实际运行的旧版版本号。修复原因后点击「检查更新」再重试。
 
+后续安装包统一使用 `src/updater.ts`，并在包元数据中声明 `runtimeGuardUpdater: 1`。安装前会自动沿用 `node_modules/.modules.yaml` 记录的现有 pnpm 仓库，备份并修正当前 profile 的 `pnpm-workspace.yaml`，保留其他插件、构建批准、设置和历史。安装仍由 DSH 原生管理器执行，不另起一套包管理流程。
+
+已经安装的旧包不会自动获得新代码。`dist/upgrade-helper.mjs` 是独立兼容入口，包含相同的更新器与 YAML 解析器，无需安装 npm 依赖。旧版用户可完全退出 DSH 后运行：
+
+```powershell
+node ./upgrade-helper.mjs --profile "$env:USERPROFILE/.dsh/profiles/desktop" --enable
+```
+
+重新打开 DSH 后，它会使用统一更新清单、SHA-256 校验与宿主原生安装器，等待所有对话空闲再升级。它不会修改旧版检测或防护代码；新包提供统一协议后兼容入口不再执行升级。若只需修复当前 pnpm 仓库再使用旧版按钮，将 `--enable` 换为 `--repair-only`；用 `--disable` 可移除兼容入口。启用前会备份原 profile patch，设置与历史不会删除。
+
 - `ERR_PNPM_UNEXPECTED_STORE`：DSH 当前 pnpm 仓库与既有依赖的仓库不同。完全退出 DSH，读取当前 profile 的 `node_modules/.modules.yaml` 中的 `storeDir`，将其仓库根目录写入同一 profile 的 `pnpm-workspace.yaml` 的 `storeDir`。例如已有仓库为 `C:\.pnpm-store\v11`，配置为 `storeDir: C:/.pnpm-store`，保留 YAML 中所有其他配置。pnpm 新版本使用 workspace 配置，不能依赖项目 `.npmrc` 生效。
 - `ERR_PNPM_GIT_FETCH_FAILED`：DSH 安装时可能解析 profile 内其他已装插件的 Git 依赖。检查该依赖的网络和 Git 代理，再重试安装。
 
@@ -117,4 +127,5 @@ npm pack --ignore-scripts
 ## 维护与发布（仅限维护者）
 
 - `npm run test:package`（调用 [test-package.mjs](scripts/test-package.mjs)）：重新打包并验证 `.tgz` 在本地缓存的 35 个真实 DSH 宿主版本中均可加载运行，同时刷新兼容矩阵结果；普通用户无需运行。
+- `npm run test:upgrades -- <DSH源码根目录> <pnpm.mjs> <目标包.tgz> <旧包.tgz> ...`：在隔离 profile 中先用真实 pnpm 复现仓库冲突，再用统一更新器和 DSH 原生管理器安装，验证校验、设置保留、兼容入口注册与移除。结果包含源包和目标包 SHA-256。发布脚本要求相同目标包通过历史升级矩阵，未通过不能发布。
 - [release-github.mjs](scripts/release-github.mjs) 与 [github-credential.mjs](scripts/github-credential.mjs)：**仅限仓库维护者使用**，用于读取发布凭据、创建 GitHub Release 并推送 `updates/stable.json`；插件自身运行与自动更新从不读取发布凭据。

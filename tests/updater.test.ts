@@ -32,7 +32,8 @@ async function fixture(changes: Record<string, unknown> = {}, link = false) {
   const release = { tag_name: 'v0.1.8', draft: false, prerelease: false, assets: [{ id: 10, name: 'dsh-runtime-guard-0.1.8.tgz', size: buffer.length, digest }] };
   return { directory, file, buffer, release };
 }
-async function setup(options: { busy?: boolean; checksum?: boolean; fail?: boolean; idleProbe?: () => boolean } = {}) {
+async function setup(options: { busy?: boolean; checksum?: boolean; fail?: boolean; idleProbe?: () => boolean;
+  currentVersion?: string; repairCurrent?: boolean; requireUnified?: boolean } = {}) {
   const data = await fixture(); let idle = !options.busy;
   if (options.checksum) data.release.assets[0]!.digest = 'sha256:' + '0'.repeat(64);
   const transport = vi.fn<typeof fetch>(async (url) => String(url).endsWith('/latest')
@@ -40,7 +41,9 @@ async function setup(options: { busy?: boolean; checksum?: boolean; fail?: boole
   const publicTransport = vi.fn<typeof fetch>(async () => new Response(null, { status: 404 }));
   const installBundle = vi.fn<Manager['installBundle']>(async () => ({ application: options.fail ? 'failed' : 'restart-required', version: '0.1.8' }));
   const updater = new Updater({ directory: data.directory, hostVersion: '0.2.1-rc.2', manager: { installBundle }, idle: options.idleProbe ?? (() => idle),
-    fetch: (url, options) => String(url).endsWith('/stable.json') ? publicTransport(url, options) : transport(url, options), schedule: false, currentVersion: '0.1.7' });
+    fetch: (url, options) => String(url).endsWith('/stable.json') ? publicTransport(url, options) : transport(url, options), schedule: false,
+    currentVersion: options.currentVersion ?? '0.1.7', ...(options.repairCurrent ? { repairCurrent: true } : {}),
+    ...(options.requireUnified ? { requireUnified: true } : {}) });
   updaters.push(updater); await updater.start();
   return { ...data, updater, transport, publicTransport, installBundle, idle: (value: boolean) => { idle = value; } };
 }
@@ -136,6 +139,16 @@ it('recognizes the installed version from a valid public manifest', async () => 
   const { buffer } = await fixture();
   expect(manifestCandidate(publicManifest(buffer), '0.1.8')).toBeNull();
   expect(manifestCandidate(publicManifest(buffer), '0.1.9')).toBeNull();
+});
+it('allows a same-version repair only through the explicit legacy bridge', async () => {
+  const normal = await setup({ currentVersion: '0.1.8' });
+  const repair = await setup({ currentVersion: '0.1.8', repairCurrent: true });
+  expect((await normal.updater.check()).phase).toBe('current');
+  expect((await repair.updater.check()).phase).toBe('available');
+  repair.updater.install(); await settled(repair.updater);
+  expect(repair.updater.status().phase).toBe('restart-required');
+  const newer = await setup({ currentVersion: '0.1.9', repairCurrent: true });
+  expect((await newer.updater.check()).phase).toBe('current');
 });
 it('checks again after the short cache expires and can enable automatic installation from cached metadata', async () => {
   const { updater, publicTransport, transport, buffer, installBundle } = await setup();
@@ -324,6 +337,12 @@ it('validates archive identity, compatibility, dependencies and installation scr
   const corruptPkg = join(dir, 'corrupt.tgz'); await create({ cwd: dir, file: corruptPkg, gzip: true }, ['package']);
   await expect(validateArchive(corruptPkg, '0.1.8', '0.2.1-rc.2')).rejects.toThrow('invalid-archive');
 });
+it('requires the unified protocol when a bridge repairs an already-installed version', async () => {
+  const legacy = await fixture();
+  await expect(validateArchive(legacy.file, '0.1.8', '0.2.1-rc.2', true)).rejects.toThrow('legacy-update-package');
+  const unified = await fixture({ runtimeGuardUpdater: 1 });
+  await validateArchive(unified.file, '0.1.8', '0.2.1-rc.2', true);
+});
 it('maps malformed fallback REST API JSON to invalid-release', async () => {
   const { updater, transport } = await setup();
   transport.mockImplementationOnce(async () => new Response('<html>not json</html>'));
@@ -341,6 +360,22 @@ it('defers installation while a conversation is busy and retains restart-require
   const reloaded = new Updater({ directory, hostVersion: '0.2.1-rc.2', manager: { installBundle }, idle: () => true, schedule: false, currentVersion: '0.1.7' });
   updaters.push(reloaded); await reloaded.start(); expect(reloaded.status().phase).toBe('restart-required');
 });
+it('confirms activation when HMR disposes the old updater before installation returns', async () => {
+  const { directory, updater, installBundle } = await setup();
+  let replacement: Updater | undefined;
+  installBundle.mockImplementationOnce(async () => {
+    updater.dispose();
+    replacement = new Updater({ directory, hostVersion: '0.2.1-rc.2', currentVersion: '0.1.8',
+      manager: { installBundle }, idle: () => true, schedule: false });
+    updaters.push(replacement); await replacement.start();
+    return { application: 'applied', version: '0.1.8' };
+  });
+  await updater.check(); updater.install(); await settled(updater);
+  expect(replacement?.status()).toMatchObject({ phase: 'current', currentVersion: '0.1.8', latestVersion: '0.1.8', error: null });
+  const saved = JSON.parse(await readFile(join(directory, '.runtime-guard/updates/state.json'), 'utf8'));
+  expect(saved).toMatchObject({ phase: 'current', currentVersion: '0.1.8' });
+  expect(saved.updatedAt).toBeTruthy();
+});
 it('rejects checksum failure without invoking the host installer', async () => {
   const { updater, installBundle } = await setup({ checksum: true }); await updater.check(); updater.install(); await settled(updater);
   expect(updater.status()).toMatchObject({ phase: 'error', error: 'checksum-failed', currentVersion: '0.1.7' }); expect(installBundle).not.toHaveBeenCalled();
@@ -348,6 +383,38 @@ it('rejects checksum failure without invoking the host installer', async () => {
 it('reports a host refusal without claiming that the new version is active', async () => {
   const { updater } = await setup({ fail: true }); await updater.check(); updater.install(); await settled(updater);
   expect(updater.status()).toMatchObject({ phase: 'error', error: 'host-install-failed', currentVersion: '0.1.7' });
+});
+it.skipIf(process.platform !== 'win32')('retries a transient native manifest rename lock with the same validated archive', async () => {
+  const { updater, installBundle } = await setup();
+  installBundle.mockResolvedValueOnce({ application: 'failed', stage: 'install', packageResult: {
+    kind: 'permission', output: "[EPERM] EPERM: operation not permitted, rename 'profile/package.json.tmp' -> 'profile/package.json'",
+  } });
+  await updater.check(); updater.install();
+  await vi.waitFor(() => expect(updater.status().phase).toBe('restart-required'));
+  expect(installBundle).toHaveBeenCalledTimes(2);
+  expect(installBundle.mock.calls[0]?.[0]).toBe(installBundle.mock.calls[1]?.[0]);
+});
+it('does not retry a permission failure without an explicit transient manifest rename', async () => {
+  const { updater, installBundle } = await setup();
+  installBundle.mockResolvedValueOnce({ application: 'failed', stage: 'install', packageResult: { kind: 'permission', output: 'EACCES: access denied' } });
+  await updater.check(); updater.install(); await settled(updater);
+  expect(installBundle).toHaveBeenCalledTimes(1);
+  expect(updater.status().error).toBe('host-permission');
+});
+it('repairs the installed store before handing the archive to the native manager', async () => {
+  const { updater, directory, installBundle } = await setup();
+  const store = join(directory, 'old-store', 'v11');
+  await mkdir(store, { recursive: true }); await mkdir(join(directory, 'node_modules'));
+  await writeFile(join(directory, 'node_modules/.modules.yaml'), JSON.stringify({ storeDir: store }));
+  await writeFile(join(directory, 'pnpm-workspace.yaml'), 'nodeLinker: hoisted\n');
+  installBundle.mockImplementationOnce(async () => {
+    expect(await readFile(join(directory, 'pnpm-workspace.yaml'), 'utf8')).toContain('old-store');
+    await expect(readFile(join(directory, 'package.json.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+    return { application: 'restart-required', version: '0.1.8' };
+  });
+  await updater.check(); updater.install(); await settled(updater);
+  expect(updater.status()).toMatchObject({ phase: 'restart-required', error: null });
+  expect(installBundle).toHaveBeenCalledTimes(1);
 });
 it.each([
   ['[ERR_PNPM_UNEXPECTED_STORE] Unexpected store location', 'unknown', 'host-store-mismatch'],

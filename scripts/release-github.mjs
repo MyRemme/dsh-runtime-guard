@@ -28,6 +28,23 @@ assert.equal(JSON.parse(entries.get('package.json').toString()).version, pkg.ver
 for (const [file, bytes] of entries) assert.deepEqual(await readFile(resolve(file)), bytes, `Repack the reviewed ${file} before publishing`);
 assert.ok(/^\d+\.\d+\.\d+$/.test(pkg.version), 'Only formal versions can be released');
 const sha256 = createHash('sha256').update(data).digest('hex');
+assert.equal(pkg.runtimeGuardUpdater, 1, 'Every release must ship the unified updater');
+const upgradeSources = JSON.parse(await readFile(resolve('compatibility/upgrade-sources.json'), 'utf8'));
+const upgradeReportPath = process.argv[3];
+assert.ok(upgradeReportPath, 'Pass the exact package upgrade-matrix results.json as the second argument');
+const upgrades = JSON.parse(await readFile(resolve(upgradeReportPath), 'utf8'));
+assert.equal(upgrades.targetVersion, pkg.version, 'Upgrade matrix tested a different version');
+assert.equal(upgrades.targetSha256, sha256, 'Upgrade matrix must test this exact archive');
+const helperBytes = entries.get('dist/upgrade-helper.mjs');
+assert.ok(helperBytes, 'Publish the standalone legacy upgrade helper');
+assert.equal(upgrades.helperSha256, createHash('sha256').update(helperBytes).digest('hex'), 'Upgrade helper differs from tested helper');
+for (const from of new Set([...upgradeSources.versions, pkg.version])) {
+  for (const mode of upgradeSources.modes) {
+    assert.ok(upgrades.results.some(result => result.from === from && result.to === pkg.version && result.mode === mode
+      && result.status === 'passed' && result.storeConflictReproduced && result.nativeManager && result.unifiedUpdater
+      && result.settingsPreserved && result.helperRegistration && (mode !== 'hmr' || result.pluginActivated)), `Upgrade gate failed: ${from} (${mode})`);
+  }
+}
 const sums = Buffer.from(`${sha256}  ${pkg.name}-${pkg.version}.tgz\n`);
 await writeFile(resolve('artifacts/checksums.sha256'), sums);
 const { githubCredential } = await import('./github-credential.mjs');
@@ -45,13 +62,18 @@ assert.equal(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8', 
 const branch = await request(`${base}/commits/main`); assert.equal(branch.sha, head, 'Push the reviewed commit first');
 const exists = await fetch(`${base}/releases/tags/${tag}`, { headers, signal: AbortSignal.timeout(15000) });
 assert.equal(exists.status, 404, 'Refuse overwriting an existing release');
+const released = await request(`${base}/releases?per_page=100`);
+for (const release of released.filter(value => !value.draft)) {
+  assert.ok(upgradeSources.versions.includes(release.tag_name.replace(/^v/, '')), `Add released version ${release.tag_name} to the upgrade matrix`);
+}
 const release = await request(`${base}/releases`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
   tag_name: tag, target_commitish: head, name: title, draft: true, prerelease: false,
   body: `${releaseBody}\n\n## 安装包校验\n\nSHA-256（${pkg.name}-${pkg.version}.tgz）：\n\n\`\`\`text\n${sha256}\n\`\`\`\n`,
 }) });
 const upload = release.upload_url.replace(/\{.*$/, '');
 let assetId;
-for (const [name, bytes, type] of [[`${pkg.name}-${pkg.version}.tgz`, data, 'application/gzip'], ['checksums.sha256', sums, 'text/plain']]) {
+for (const [name, bytes, type] of [[`${pkg.name}-${pkg.version}.tgz`, data, 'application/gzip'], ['checksums.sha256', sums, 'text/plain'],
+  ['upgrade-helper.mjs', helperBytes, 'text/javascript'], ['upgrade-results.json', Buffer.from(JSON.stringify(upgrades, null, 2) + '\n'), 'application/json']]) {
   const asset = await request(`${upload}?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'Content-Type': type }, body: bytes });
   if (name.endsWith('.tgz')) assetId = asset.id;
 }

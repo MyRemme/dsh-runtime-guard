@@ -1,6 +1,7 @@
 {
   "name": "dsh-runtime-guard",
   "version": "0.2.7",
+  "runtimeGuardUpdater": 1,
   "description": "DSH 运行时护栏：模型防空转与工具越权审批防护插件",
   "type": "module",
   "license": "MIT",
@@ -64,6 +65,7 @@
     "test:safety-host": "npm run build && vitest run tests/safety-host.test.ts",
     "test:package": "npm pack --ignore-scripts --pack-destination artifacts && node scripts/test-package.mjs",
     "test:versions": "npm run build && node scripts/test-versions.mjs",
+    "test:upgrades": "npm run build && node scripts/test-upgrades.mjs",
     "check": "npm run typecheck && npm test && npm run build",
     "prepack": "npm run build",
     "matrix": "node scripts/render-matrix.mjs",
@@ -86,7 +88,8 @@
     "react-dom": "18.2.0",
     "tar": "7.5.23",
     "typescript": "7.0.2",
-    "vitest": "5.1.0"
+    "vitest": "5.1.0",
+    "yaml": "2.9.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-agent": {
