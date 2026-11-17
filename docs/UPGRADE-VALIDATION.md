@@ -2,8 +2,8 @@
 
 Target: Runtime Guard 0.2.7, updater protocol 1.
 
-- Archive SHA-256: `7799119153e900914e1f8893f3311e02f920d48165ec4b6d15caa32df4f864ad`
-- Standalone helper SHA-256: `4d10a3133f3f83b36eb0316de7713a74ae1e1d1dbcf4609cae210f60007a7f74`
+- Archive SHA-256: `937f0595efe250da5402b0a7767f344d19a1a4851ae36d5bcc9c219b3e4e9b48`
+- Standalone helper SHA-256: `0100d39675c6dadab05ac054c4516be8851d96e8fdd6458657edd66c3cfd5b48`
 - Host: DSH 0.2.1-rc.2, Windows, bundled pnpm 11.28.5.
 - Sources: 0.2.0, 0.2.1, 0.2.2, 0.2.3, 0.2.4, 0.2.5, 0.2.6, original 0.2.7, 0.2.7-beta.1.
 - Each source passed startup/restart-required and live HMR installation: 18/18.
@@ -15,7 +15,9 @@ Target: Runtime Guard 0.2.7, updater protocol 1.
   enable/re-enable/disable and default empty patch restoration passed.
 - Release HTTP metadata/download responses were deterministic fixtures. This
   matrix does not claim to test GitHub availability or every DSH host version.
-- Final regression: 397 passed, 1 skipped; TypeScript check passed.
+- The legacy helper's actual plugin entry was separately exercised in real
+  Cordis, including its Agent service injection and busy-agent queue.
+- Final regression: 398 passed, 1 skipped; TypeScript check passed.
 
 The full machine-readable report is published as `upgrade-results.json` with
 the repaired 0.2.7 archive. Future releases must pass the same upgrade gate with

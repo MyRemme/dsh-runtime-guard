@@ -23,7 +23,7 @@ function hostVersion(anchor: string): string {
 
 /** Optional bridge for installed legacy releases; uses the current updater unchanged. */
 export const name = 'runtime-guard-upgrade-helper';
-export const inject = ['pluginManager', 'profileContext', 'runtimeGuard'];
+export const inject = ['pluginManager', 'profileContext', 'runtimeGuard', 'agents'];
 export function apply(ctx: HostContext): void {
   const profile = ctx.get?.('profileContext') as { dir: string; installAnchor: string };
   const manager = ctx.get?.('pluginManager') as Manager;

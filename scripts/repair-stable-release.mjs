@@ -54,7 +54,8 @@ const release = await request(`${base}/releases/tags/v0.2.7`);
 const feed = await request(`${base}/contents/updates/stable.json?ref=main`);
 const originalFeed = JSON.parse(Buffer.from(feed.content, 'base64'));
 assert.equal(originalFeed.version, pkg.version);
-assert.ok(['2a771e0d9f09145e565628717fa1023652180eaac4f5a141d36dfa3a1cfc966e', hash(archive)].includes(originalFeed.sha256), 'Unknown public archive; refuse replacing it');
+assert.ok(['2a771e0d9f09145e565628717fa1023652180eaac4f5a141d36dfa3a1cfc966e',
+  '7799119153e900914e1f8893f3311e02f920d48165ec4b6d15caa32df4f864ad', hash(archive)].includes(originalFeed.sha256), 'Unknown public archive; refuse replacing it');
 const releases = await request(`${base}/releases?per_page=100`);
 for (const item of releases.filter(item => !item.draft)) {
   assert.ok(sources.versions.includes(item.tag_name.replace(/^v/, '')), `Untested released source: ${item.tag_name}`);
@@ -105,8 +106,13 @@ if (!publish) {
   for (const legacy of releases.filter(item => !item.draft && item.id !== release.id)) {
     const assets = await request(`${base}/releases/${legacy.id}/assets?per_page=100`);
     const existing = assets.find(item => item.name === 'upgrade-helper.mjs');
-    if (existing) assert.equal(existing.digest, `sha256:${hash(helper)}`, 'Different legacy helper exists');
-    else await request(`${legacy.upload_url.replace(/\{.*$/, '')}?name=upgrade-helper.mjs`, 'POST', helper, 'text/javascript');
+    if (existing && existing.digest !== `sha256:${hash(helper)}`) {
+      const stagedHelper = await request(`${legacy.upload_url.replace(/\{.*$/, '')}?name=upgrade-helper.mjs.${suffix}`, 'POST', helper, 'text/javascript');
+      assert.equal(stagedHelper.digest, `sha256:${hash(helper)}`);
+      await request(`${base}/releases/assets/${existing.id}`, 'PATCH', { name: `upgrade-helper.mjs.original-${existing.id}` });
+      try { await request(`${base}/releases/assets/${stagedHelper.id}`, 'PATCH', { name: 'upgrade-helper.mjs' }); }
+      catch (error) { await request(`${base}/releases/assets/${existing.id}`, 'PATCH', { name: 'upgrade-helper.mjs' }); throw error; }
+    } else if (!existing) await request(`${legacy.upload_url.replace(/\{.*$/, '')}?name=upgrade-helper.mjs`, 'POST', helper, 'text/javascript');
     const note = `${marker}\n## 旧版升级迁移\n\n旧安装请使用 [0.2.7 修复包及迁移说明](https://github.com/MyRemme/dsh-runtime-guard/releases/tag/v0.2.7)。本页附带同一份 upgrade-helper.mjs；无需先卸载旧版，设置与历史保留。\n`;
     await request(`${base}/releases/${legacy.id}`, 'PATCH', { body: (legacy.body ?? '').split(marker)[0].trimEnd() + '\n\n' + note });
   }
