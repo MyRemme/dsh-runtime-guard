@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import React from 'react';
@@ -48,6 +49,49 @@ async function mount(call, sessionId, services = {}, withPanel = false) {
 }
 const button = text => [...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === text || b.textContent === text);
 const selectTab = async text => { await act(async () => { button(text).click(); }); };
+it('shows a disk logging switch and directory, saves immediately and retains the choice on failure', async () => {
+  let value = { enabled: false, healthy: true, available: true, persistent: true, directory: 'C:/profile/.runtime-guard/logs', limit: 100, sessionLimit: 128 };
+  let fail = false;
+  const call = vi.fn(async (_channel, method, payload) => {
+    if (method === 'setDiskLogging') {
+      if (fail) return { ok: false };
+      value = { ...value, enabled: payload.enabled }; return { ok: true, value };
+    }
+    return { ok: true, value: method === 'conversations' ? [] : method === 'diskLogging' ? value : { ...baseline(), logging: value } };
+  });
+  await mount(call); await selectTab('监控设置');
+  expect(document.querySelector('[aria-label="磁盘日志与历史记录"]').textContent).toContain(value.directory);
+  const toggle = button('启用磁盘日志'); expect(toggle.disabled).toBe(false);
+  await act(async () => { toggle.click(); });
+  expect(call).toHaveBeenCalledWith('/runtime-guard', 'setDiskLogging', { enabled: true }, expect.anything());
+  expect(toggle.getAttribute('aria-checked')).toBe('true');
+  expect(document.body.textContent).toContain('已开启 · 自动保存');
+  fail = true; await act(async () => { toggle.click(); });
+  expect(toggle.getAttribute('aria-checked')).toBe('true');
+  expect(document.querySelector('[role="alert"]').textContent).toContain('日志设置保存失败');
+});
+it('restores anonymous history navigation from the local catalog and does not replay old warning toasts', async () => {
+  const id = 'private-restored-session', key = createHash('sha256').update(id).digest('hex').slice(0, 16), openSession = vi.fn();
+  Object.defineProperty(dom.window.crypto, 'subtle', { value: { digest: async (_algorithm, bytes) => Uint8Array.from(createHash('sha256').update(bytes).digest()).buffer } });
+  dom.window.TextEncoder = TextEncoder;
+  const item = { ...sessionData(), tracked: false, sessionId: '', sessionKey: key, counterScope: 'history', live: null };
+  const event = { kind: 'stream-repeat', session: key, confirmed: true, time: '2026-11-16T10:00:00Z' };
+  await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [item] : { ...baseline(), startedAt: '2026-11-17T10:00:00Z', events: [event] } }), undefined,
+    { sessions: { list: { getSnapshot: () => ({ byId: { [id]: { title: '保存过的对话' } } }) } }, uiWorkspace: { openSession } });
+  expect(document.querySelector('.fs-conversation-title').textContent).toContain('保存过的对话');
+  expect(document.querySelector('.fs-conversation').textContent).toContain('仅保留历史记录');
+  expect(document.querySelector('.fs-toast')).toBeNull();
+  await act(async () => { button('打开对话').click(); });
+  expect(openSession).toHaveBeenCalledWith(id);
+});
+it('disables navigation for historical hashes missing from the host catalog while allowing record filtering', async () => {
+  const item = { ...sessionData(), tracked: false, sessionId: '', sessionKey: '0123456789abcdef', live: null };
+  await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [item] : baseline() }), undefined, { uiWorkspace: { openSession: vi.fn() } });
+  expect(button('打开对话').disabled).toBe(true);
+  expect(button('暂停此对话监控').disabled).toBe(true);
+  await act(async () => { button('查看此对话记录').click(); });
+  expect(button('显示全部对话')).toBeDefined();
+});
 it('keeps one page mounted and navigates tabs with the keyboard', async () => {
   await mount(async (_channel, method) => ({ ok: true, value: method === 'conversations' ? [] : baseline() }));
   expect(document.querySelectorAll('[role="tabpanel"]')).toHaveLength(1);

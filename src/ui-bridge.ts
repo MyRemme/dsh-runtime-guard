@@ -14,6 +14,11 @@ export function registerUI(ctx: HostContext, api: RuntimeGuardAPI, updates: Upda
       if (signal.aborted) return fail('ABORTED', 'Request cancelled');
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return fail('BAD_REQUEST', 'Invalid payload');
       const keys = Object.keys(payload);
+      if (endpoint === 'setDiskLogging') {
+        const enabled = (payload as { enabled?: unknown }).enabled;
+        if (keys.length !== 1 || typeof enabled !== 'boolean') return fail('BAD_REQUEST', 'Expected enabled boolean');
+        return api.setDiskLogging(enabled).then(value => ({ ok: true, value }), () => fail('SETTINGS_FAILED', 'Could not save disk logging'));
+      }
       if (endpoint === 'setOperationSafety') {
         const enabled = (payload as { enabled?: unknown }).enabled;
         if (keys.length !== 1 || typeof enabled !== 'boolean') return fail('BAD_REQUEST', 'Expected enabled boolean');
@@ -54,6 +59,7 @@ export function registerUI(ctx: HostContext, api: RuntimeGuardAPI, updates: Upda
         return { ok: true, value: api.sessionStatus(sessionId) };
       }
       if (keys.length) return fail('BAD_REQUEST', 'Expected empty payload');
+      if (endpoint === 'diskLogging') return { ok: true, value: api.diskLogging() };
       if (endpoint === 'operationSafety') return { ok: true, value: api.operationSafety() };
       if (endpoint === 'modelScope') return { ok: true, value: api.modelScope() };
       if (endpoint === 'refreshModels') return api.refreshModels().then(value => ({ ok: true, value }), () => fail('CATALOG_FAILED', 'Could not read models'));

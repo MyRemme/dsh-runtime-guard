@@ -30,7 +30,7 @@ export interface RuntimeGuardAPI {
     monitoredRequests: number; activeRequests: number; confirmed: number; toolWarnings: number; recoverySubmitted: number; cancelRequested: number;
     lastMonitoredAt: string | null; latestEvent: DiagnosticEvent | null; events: ReturnType<MetricsStore['forSession']>;
     turn: number; step: number; toolResults: number; lastToolAt: string | null;
-    counterScope: 'tracked' | 'retained-events';
+    counterScope: 'tracked' | 'history' | 'retained-events';
     live: (ReturnType<StreamMonitor['snapshot']> & { turn: number; step: number; startedAt: string; active: boolean; silentForMs: number }) | null;
   };
   /** Owner UI only; excluded from status(), disk and export. */
@@ -44,6 +44,8 @@ export interface RuntimeGuardAPI {
   setSessionEnabled(sessionId: string, enabled: boolean): void;
   operationSafety(): SafetyStatus;
   setOperationSafety(enabled: boolean): Promise<SafetyStatus>;
+  diskLogging(): ReturnType<MetricsStore['loggingSettings']>;
+  setDiskLogging(enabled: boolean): Promise<ReturnType<MetricsStore['loggingSettings']>>;
 }
 interface RequestState { monitor: StreamMonitor; signal: AbortSignal; route: RequestOptions; frameId?: string; turn: number; step: number; startedAt: string }
 interface SessionState {
@@ -104,10 +106,10 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
   let disposed = false;
   let monitoring = true;
   const startedAt = new Date().toISOString();
-  let monitoredRequests = 0, finishedRequests = 0;
-  let lastMonitoredAt: string | null = null;
   const warn = (message: string) => { try { ctx.logger?.warn(message); } catch { /* Logging is optional. */ } };
-  const metrics = new MetricsStore(config.logDir, config.maxLogBytes, () => warn('runtime-guard: diagnostic logging disabled after an I/O error'));
+  const metrics = new MetricsStore(config.logDir, config.maxLogBytes, () => warn('runtime-guard: diagnostic logging disabled after an I/O error'), {
+    ...(profile?.dir ? { profileDirectory: profile.dir } : {}), sessionLimit: config.maxSessions,
+  });
   const report = (event: Notice) => {
     const safe = metrics.record(event);
     const state = states.get(event.session);
@@ -117,6 +119,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
       if (event.kind === 'tool-repeat') state.toolWarnings++;
       if (event.kind === 'recovery' && event.action === 'recovery-submitted') state.recoverySubmitted++;
       if (event.kind === 'recovery' && event.action === 'cancel-requested') state.cancelRequested++;
+      metrics.remember(event.session, state);
     }
     if (event.kind !== 'recovery' && event.score < 70) return;
     warn(config.language === 'zh'
@@ -172,7 +175,8 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     const enabled = !disabledSessions.has(agent.id);
     recovery.setEnabled(agent, enabled && monitoring && selected(agent.model?.current() ?? agent.options ?? {}));
     state = { agent, turn: 0, step: 0, progress: new ProgressGuard(config.toolRepeatLimit), stepTracker: new StepLoopTracker(), enabled, noticeKeys: new Set(),
-      coverage: 'waiting', monitoredRequests: 0, confirmed: 0, toolWarnings: 0, recoverySubmitted: 0, cancelRequested: 0, lastMonitoredAt: null, latestEvent: null, toolResults: 0, lastToolAt: null };
+      coverage: 'waiting', monitoredRequests: 0, confirmed: 0, toolWarnings: 0, recoverySubmitted: 0, cancelRequested: 0, lastMonitoredAt: null, latestEvent: null, toolResults: 0, lastToolAt: null,
+      ...metrics.sessionSummary(sessionKey(agent.id)) };
     states.set(agent.id, state);
     return state;
   };
@@ -247,8 +251,8 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
         delete state.frameId; // A pre-stream start frame is consumed once, including retries in the same step.
         state.activity = request;
         state.request = request;
-        monitoredRequests++; lastMonitoredAt = new Date().toISOString();
-        state.monitoredRequests++; state.lastMonitoredAt = lastMonitoredAt; state.coverage = 'checked';
+        state.monitoredRequests++; state.lastMonitoredAt = new Date().toISOString(); state.coverage = 'checked';
+        metrics.requestStarted(state.lastMonitoredAt); metrics.remember(state.agent.id, state);
       }, state);
       const ownRequest = request;
       let completed = false;
@@ -260,7 +264,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
         completed = true;
       } finally {
         if (ownRequest) {
-          finishedRequests++;
+          metrics.requestFinished();
           if (completed && !reasoningObserved && state.agent === states.get(state.agent.id)?.agent) state.stepTracker.clear();
           if (state.request === ownRequest) {
             if (!completed) state.coverage = 'unavailable';
@@ -296,6 +300,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     const route = exec.agent.model?.current() ?? exec.agent.options;
     if (!selected(route ?? {})) return;
     state.toolResults++; state.lastToolAt = new Date().toISOString();
+    metrics.remember(exec.agent.id, state);
     const evidence = state.progress.record(exec, result);
     if (evidence.repeated && evidence.count % config.toolRepeatLimit === 0) {
       const extra = Math.min(10, Math.floor((evidence.count - config.toolRepeatLimit) / config.toolRepeatLimit) * 5);
@@ -322,37 +327,43 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     if (states.get(agent.id)?.agent === agent) states.delete(agent.id);
     recovery.forget(agent);
   }, states.get(agent.id)));
-  const api: RuntimeGuardAPI = {
-    sessionStatus: sessionId => {
+  const sessionStatus = (sessionId: string, key = sessionKey(sessionId)): ReturnType<RuntimeGuardAPI['sessionStatus']> => {
       const state = states.get(sessionId);
+      const saved = metrics.sessionSummary(key), counters = state ?? saved;
       const activity = state?.activity, live = activity?.monitor.snapshot();
-      const events = metrics.forSession(sessionId);
+      const events = metrics.forKey(key);
       const retained = (kind: string, action?: string) => events.filter(event => event.kind === kind && (action ? event.action === action : event.confirmed)).length;
       return {
         monitoring: monitoring && !disposed, sessionEnabled: !disabledSessions.has(sessionId), mode: effectiveMode, startedAt,
         coverage: !monitoring || disposed ? 'paused' : disabledSessions.has(sessionId) ? 'disabled'
           : state?.request ? 'monitoring' : state?.coverage ?? 'waiting',
-        monitoredRequests: state?.monitoredRequests ?? 0, activeRequests: state?.request ? 1 : 0,
-        counterScope: state ? 'tracked' : 'retained-events',
-        confirmed: state?.confirmed ?? retained('stream-repeat'), toolWarnings: state?.toolWarnings ?? events.filter(e => e.kind === 'tool-repeat').length,
-        recoverySubmitted: state?.recoverySubmitted ?? retained('recovery', 'recovery-submitted'), cancelRequested: state?.cancelRequested ?? retained('recovery', 'cancel-requested'),
-        lastMonitoredAt: state?.lastMonitoredAt ?? null, latestEvent: state?.latestEvent ? { ...state.latestEvent } : state ? null : events[0] ?? null, events,
-        turn: state?.turn ?? 0, step: state?.step ?? 0, toolResults: state?.toolResults ?? 0, lastToolAt: state?.lastToolAt ?? null,
+        monitoredRequests: counters?.monitoredRequests ?? 0, activeRequests: state?.request ? 1 : 0,
+        counterScope: state ? 'tracked' : saved ? 'history' : 'retained-events',
+        confirmed: counters?.confirmed ?? retained('stream-repeat'), toolWarnings: counters?.toolWarnings ?? events.filter(e => e.kind === 'tool-repeat').length,
+        recoverySubmitted: counters?.recoverySubmitted ?? retained('recovery', 'recovery-submitted'), cancelRequested: counters?.cancelRequested ?? retained('recovery', 'cancel-requested'),
+        lastMonitoredAt: counters?.lastMonitoredAt ?? null, latestEvent: state?.latestEvent ? { ...state.latestEvent } : state ? null : events[0] ?? null, events,
+        turn: counters?.turn ?? 0, step: counters?.step ?? 0, toolResults: counters?.toolResults ?? 0, lastToolAt: counters?.lastToolAt ?? null,
         live: activity && live ? { ...live, turn: activity.turn, step: activity.step, startedAt: activity.startedAt,
           active: state.request === activity, silentForMs: state.request === activity ? Math.max(0, Date.now() - Date.parse(live.lastOutputAt ?? activity.startedAt)) : 0 } : null,
       };
-    },
+    };
+  const api: RuntimeGuardAPI = {
+    sessionStatus,
     conversations: () => {
       const ids = new Set([...states.keys(), ...metrics.sessionReferences().map(item => item.sessionId)]);
-      return [...ids].map(sessionId => ({ sessionId, sessionKey: sessionKey(sessionId), tracked: states.has(sessionId), ...api.sessionStatus(sessionId) }))
+      const known = new Map([...ids].map(id => [sessionKey(id), id]));
+      return [...new Set([...known.keys(), ...metrics.sessionKeys()])].map(key => {
+        const sessionId = known.get(key) ?? '';
+        return { sessionId, sessionKey: key, tracked: states.has(sessionId), ...sessionStatus(sessionId, key) };
+      })
         .sort((a, b) => b.activeRequests - a.activeRequests || (b.lastMonitoredAt ?? '').localeCompare(a.lastMonitoredAt ?? ''));
     },
     status: () => ({
       compatibility: { ...compatibility }, mode: effectiveMode, sessions: states.size, counts: { ...metrics.counts },
       modelScope: modelScope.summary(),
-      monitoring: monitoring && !disposed, startedAt, monitoredRequests, finishedRequests,
+      monitoring: monitoring && !disposed, startedAt, ...metrics.requestTotals(),
       activeRequests: [...states.values()].filter(state => state.request).length,
-      lastMonitoredAt, ...metrics.snapshot(),
+      ...metrics.snapshot(),
       operationSafety: operationSafety.status(),
     }),
     setMonitoring: enabled => guarded(() => {
@@ -382,6 +393,8 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     modelScope: () => modelScope.view(),
     operationSafety: () => operationSafety.status(),
     setOperationSafety: enabled => operationSafety.setEnabled(enabled),
+    diskLogging: () => metrics.loggingSettings(),
+    setDiskLogging: enabled => disposed ? Promise.reject(new Error('settings unavailable')) : metrics.setEnabled(enabled),
     setModelScope: input => modelScope.set(input),
     refreshModels: () => modelScope.refresh((ctx.get?.('llm', false) ?? ctx.llm) as ModelCatalog | undefined),
     selfTest: () => {

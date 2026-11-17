@@ -84,7 +84,7 @@ window.__ModuleLoader__.load({
       return { title: event.kind === 'internal-error' ? '监控异常' : '监控已启动', reason: '', result: event.kind === 'internal-error' ? '当前检测可能不完整，模型输出继续传递。' : '观察模式已就绪。' };
     }
     function createController(ctx) {
-      let state = { data: null, conversations: [], conversationError: '', sessions: Object.create(null), sessionErrors: Object.create(null), error: '', busy: false, test: '', toast: null, updatedAt: null, updates: null, updateError: '', updateBusy: false, modelScope: null, scopeError: '', scopeReadError: '', scopeLoading: false };
+      let state = { data: null, conversations: [], conversationError: '', sessions: Object.create(null), sessionErrors: Object.create(null), error: '', busy: false, test: '', toast: null, updatedAt: null, updates: null, updateError: '', updateBusy: false, modelScope: null, scopeError: '', scopeReadError: '', scopeLoading: false, logging: null, loggingError: '', loggingReadError: '' };
       const listeners = new Set(), requests = new Set(), downloads = new Map(), watched = new Map(), pendingSessions = new Set();
       let disposed = false, polling = false, listing = false, generation = 0, lastNotice = '';
       const publish = patch => { if (!disposed) { state = { ...state, ...patch }; for (const fn of listeners) fn(); } };
@@ -98,7 +98,7 @@ window.__ModuleLoader__.load({
         } finally { clearTimeout(timer); requests.delete(controller); }
       }
       function accept(data) {
-        const event = data.events.find(e => e.kind === 'internal-error' || e.kind === 'tool-repeat' || (e.kind === 'stream-repeat' && (e.confirmed || e.uncertainty)) || (e.kind === 'recovery' && e.action === 'recovery-submitted'));
+        const event = data.events.find(e => (!data.startedAt || !e.time || Date.parse(e.time) >= Date.parse(data.startedAt)) && (e.kind === 'internal-error' || e.kind === 'tool-repeat' || (e.kind === 'stream-repeat' && (e.confirmed || e.uncertainty)) || (e.kind === 'recovery' && e.action === 'recovery-submitted')));
         const id = event ? `${event.session}/${event.time}/${event.kind}/${event.contentType || ''}/${event.action || ''}/${event.repeats || ''}` : '';
         const patch = { data, error: '', updatedAt: new Date().toISOString() };
         if (id && id !== lastNotice) { patch.toast = event; lastNotice = id; }
@@ -120,12 +120,39 @@ window.__ModuleLoader__.load({
         catch { if (generation === current) publish({ error: '监控服务未连接' }); }
         finally { polling = false; if (current !== generation) void refresh(); }
       }
+      const navigationHashes = new Map();
+      async function resolveConversations(items) {
+        if (!items.some(item => !item.sessionId) || !window.crypto?.subtle || !window.TextEncoder) return items;
+        // Associate saved hashes with the owner's existing catalog in memory only.
+        const catalog = (ctx.get?.('sessions') ?? ctx.sessions)?.list?.getSnapshot?.().byId ?? {};
+        const associations = new Map();
+        await Promise.all(Object.keys(catalog).map(async id => {
+          let pending = navigationHashes.get(id);
+          if (!pending) {
+            pending = window.crypto.subtle.digest('SHA-256', new window.TextEncoder().encode(id)).then(bytes => Array.from(new Uint8Array(bytes).slice(0, 8), byte => byte.toString(16).padStart(2, '0')).join(''));
+            if (navigationHashes.size >= 4096) navigationHashes.delete(navigationHashes.keys().next().value);
+            navigationHashes.set(id, pending);
+          }
+          try { associations.set(await pending, id); } catch { navigationHashes.delete(id); }
+        }));
+        return items.map(item => item.sessionId ? item : { ...item, sessionId: associations.get(item.sessionKey) || '' });
+      }
       async function refreshConversations() {
         if (disposed || listing || state.busy) return;
         listing = true; const current = generation;
-        try { const value = await call('conversations'); if (generation === current) publish({ conversations: Array.isArray(value) ? value : [], conversationError: '' }); }
+        try { const value = await call('conversations'); const items = await resolveConversations(Array.isArray(value) ? value : []); if (generation === current) publish({ conversations: items, conversationError: '' }); }
         catch { if (generation === current) publish({ conversationError: '对话列表未连接，请刷新重试。' }); }
         finally { listing = false; if (current !== generation) void refreshConversations(); }
+      }
+      let loggingPolling = false;
+      async function refreshLogging() {
+        if (disposed || loggingPolling || state.busy) return;
+        loggingPolling = true; const current = generation;
+        try {
+          const value = await call('diskLogging');
+          if (current === generation && typeof value?.available === 'boolean') publish({ logging: value, loggingReadError: '' });
+        } catch { if (current === generation) publish({ loggingReadError: '日志设置未同步，请刷新重试。' }); }
+        finally { loggingPolling = false; if (current !== generation) void refreshLogging(); }
       }
       let scopePolling = false;
       async function refreshScope(catalog = false) {
@@ -160,7 +187,7 @@ window.__ModuleLoader__.load({
         catch { publish({ updateError: '更新操作未完成，请检查状态后重试。' }); }
         finally { updateGeneration++; publish({ updateBusy: false }); void refreshUpdates(); }
       }
-      async function poll() { await Promise.all([refresh(), refreshConversations(), refreshUpdates(), refreshScope(), ...[...watched.keys()].map(refreshSession)]); }
+      async function poll() { await Promise.all([refresh(), refreshConversations(), refreshUpdates(), refreshScope(), refreshLogging(), ...[...watched.keys()].map(refreshSession)]); }
       async function action(endpoint, payload) {
         if (state.busy || disposed) return;
         generation++; publish({ busy: true, error: '' });
@@ -173,6 +200,7 @@ window.__ModuleLoader__.load({
             publish({ sessions: { ...state.sessions, [payload.sessionId]: value }, sessionErrors: { ...state.sessionErrors, [payload.sessionId]: '' } });
           }
           if (endpoint === 'setModelScope') publish({ modelScope: value, scopeError: '' });
+          if (endpoint === 'setDiskLogging') publish({ logging: value, loggingError: '', data: state.data ? { ...state.data, logging: value } : null });
           if (endpoint === 'selfTest') publish({ test: value.passed && value.modelRequests === 0 ? '离线自检通过，未调用模型，未计入真实告警。' : '离线自检未通过。' });
           if (endpoint === 'export') {
             const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }));
@@ -180,8 +208,8 @@ window.__ModuleLoader__.load({
             downloads.set(url, setTimeout(() => { URL.revokeObjectURL(url); downloads.delete(url); }, 60000));
             const a = document.createElement('a'); a.href = url; a.download = 'runtime-guard-diagnostics.json'; document.body.appendChild(a); a.click(); a.remove();
           }
-        } catch { publish(endpoint === 'setOperationSafety' ? { safetyError: '操作防护设置保存失败，原设置仍然生效。请重试。' } : endpoint === 'setModelScope' ? { scopeError: '范围保存失败，原设置仍然生效。请重试。' } : { error: '操作未完成，请重试。' }); }
-        finally { generation++; publish({ busy: false }); void refresh(); void refreshScope(); refreshConversations(); for (const id of watched.keys()) refreshSession(id); }
+        } catch { publish(endpoint === 'setDiskLogging' ? { loggingError: '日志设置保存失败，原设置仍然生效。请重试。' } : endpoint === 'setOperationSafety' ? { safetyError: '操作防护设置保存失败，原设置仍然生效。请重试。' } : endpoint === 'setModelScope' ? { scopeError: '范围保存失败，原设置仍然生效。请重试。' } : { error: '操作未完成，请重试。' }); }
+        finally { generation++; publish({ busy: false }); void refresh(); void refreshScope(); void refreshLogging(); refreshConversations(); for (const id of watched.keys()) refreshSession(id); }
       }
       const onVisibility = () => { if (document.visibilityState !== 'hidden' && !disposed) void poll(); };
       document.addEventListener?.('visibilitychange', onVisibility);
@@ -223,7 +251,7 @@ window.__ModuleLoader__.load({
           const text = explain(event, mode);
           return h('li', { className: 'fs-event', key: `${event.session}/${event.time}/${i}` },
             h('div', { className: 'fs-event-head' }, h('span', { className: 'fs-event-title' }, text.title), h('time', null, time(event.time))),
-            h('div', { className: 'fs-event-context' }, event.session && (() => { const item = conversations.find(item => item.sessionKey === event.session); return h('button', { type: 'button', className: 'fs-link', disabled: !item || !service('uiWorkspace')?.openSession, onClick: () => openConversation(item) }, item ? conversationName(item) : `对话 ${event.session.slice(0, 8)}`); })(),
+            h('div', { className: 'fs-event-context' }, event.session && (() => { const item = conversations.find(item => item.sessionKey === event.session); return h('button', { type: 'button', className: 'fs-link', disabled: !item?.sessionId || !service('uiWorkspace')?.openSession, onClick: () => openConversation(item) }, item ? conversationName(item) : `对话 ${event.session.slice(0, 8)}`); })(),
               event.turn !== undefined && h('span', { className: 'fs-tag' }, `第 ${event.turn} 轮${event.step === undefined ? '' : ` · 步骤 ${event.step}`}`)),
             h('p', { className: 'fs-result' }, text.result), text.reason && h('details', null, h('summary', null, '检测依据'), h('div', { className: 'fs-detail-body' }, h('p', null, text.reason))));
         }));
@@ -305,17 +333,17 @@ window.__ModuleLoader__.load({
                 const paused = item.sessionEnabled === false || item.coverage === 'disabled';
                 return h('article', { className: 'fs-conversation', key: item.sessionKey },
                   h('div', { className: 'fs-conversation-head' }, h('div', { className: 'fs-conversation-title', title: conversationName(item) }, conversationName(item)),
-                    h('div', { className: 'fs-tools' }, command(paused ? '启用此对话监控' : '暂停此对话监控', () => controller.action('setSessionEnabled', { sessionId: item.sessionId, enabled: paused }), paused ? UI.IconPlayOutlineRegular : UI.IconPauseOutlineRegular, state.busy, true), command('查看此对话记录', () => { setFilter(item.sessionKey); setPane('events'); }, UI.IconInfoOutlineRegular, false, true), command('打开对话', () => openConversation(item), UI.IconLinkOutlineRegular, !service('uiWorkspace')?.openSession, true))),
+                    h('div', { className: 'fs-tools' }, command(paused ? '启用此对话监控' : '暂停此对话监控', () => controller.action('setSessionEnabled', { sessionId: item.sessionId, enabled: paused }), paused ? UI.IconPlayOutlineRegular : UI.IconPauseOutlineRegular, state.busy || !item.sessionId, true), command('查看此对话记录', () => { setFilter(item.sessionKey); setPane('events'); }, UI.IconInfoOutlineRegular, false, true), command('打开对话', () => openConversation(item), UI.IconLinkOutlineRegular, !item.sessionId || !service('uiWorkspace')?.openSession, true))),
                   status(current.label, current.tone),
                   h('div', { className: 'fs-conversation-meta' }, h('span', null, `第 ${item.live?.turn ?? item.turn ?? 0} 轮 · 步骤 ${item.live?.step ?? item.step ?? 0}`), h('span', null, `确认重复 ${item.confirmed} 次`), h('span', null, `已提交纠正 ${item.recoverySubmitted} 次`)),
-                  h('details', null, h('summary', null, '详情'), h('div', { className: 'fs-detail-body' }, h(Live, { data: item }), h('p', { className: 'fs-muted' }, `${item.counterScope === 'retained-events' ? '保留事件中' : '累计'}${item.cancelRequested ? `请求中断 ${item.cancelRequested} 次` : '未拦截、未中断'}`), !item.tracked && h('p', { className: 'fs-muted' }, '会话已不在实时跟踪中，仅显示保留事件。'))));
+                  h('details', null, h('summary', null, '详情'), h('div', { className: 'fs-detail-body' }, h(Live, { data: item }), h('p', { className: 'fs-muted' }, `${item.counterScope === 'retained-events' ? '保留事件中' : '累计'}${item.cancelRequested ? `请求中断 ${item.cancelRequested} 次` : '未拦截、未中断'}`), !item.tracked && h('p', { className: 'fs-muted' }, '历史记录；收到此对话的新请求后继续实时监控。'))));
               }) : h('div', { className: 'fs-empty' }, query.trim() ? '没有匹配的对话' : '尚无已跟踪的对话')),
               h('p', { className: 'fs-health-note' }, '“暂未发现循环”仅描述已收到的输出。')),
             h('section', { className: 'fs-section fs-monitor-section', 'aria-label': '检测与处理' }, h('div', { className: 'fs-section-head' }, h('h3', null, '检测与处理'), h('span', { className: 'fs-muted' }, `${events.length} 条记录`)),
               filter && h('div', { className: 'fs-filter' }, h('span', { className: 'fs-muted' }, conversationName(state.conversations.find(item => item.sessionKey === filter) || { sessionKey: filter })), command('显示全部对话', () => setFilter(''), UI.IconCloseOutlineRegular, false, true)),
               h('div', { className: 'fs-scroll', role: 'region', 'aria-label': '检测记录', tabIndex: 0, ref: eventRegion }, events.length ? h(Events, { events, mode: data.mode, conversations: state.conversations }) : h('div', { className: 'fs-empty' }, '尚无检测记录'))))) : h('div', { className: 'fs-empty' }, state.error || '正在连接监控服务')),
           tab === 'safety' && h('div', { className: 'fs-settings' }, h(OperationSafety, { state })),
-          tab === 'settings' && h('div', { className: 'fs-settings' }, data &&
+          tab === 'settings' && h('div', { className: 'fs-settings' }, h(DiskLogging, { state }), data &&
             h('section', { className: 'fs-section' }, h('div', { className: 'fs-section-head' }, h('h3', null, '重复检测')),
               h('div', { className: 'fs-setting-row' }, h('div', { className: 'fs-setting-copy' }, h('strong', null, '处理模式'), h('small', null, '确认重复后执行的动作')),
               h('fieldset', { className: 'fs-model-modes', disabled: !online || state.busy, 'aria-label': '处理模式选择' },
@@ -327,10 +355,26 @@ window.__ModuleLoader__.load({
                   : data.compatibility.reason === 'host-version-mismatch'
                     ? `当前宿主版本与配置（${data.compatibility.version || '未知'}）不一致，已回退到观察模式，「防护停止」不可用。`
                     : `当前宿主版本（${data.compatibility.version || '未知'}）尚未通过防护停止验证，「防护停止」暂不可用。`),
-              h('dl', { className: 'fs-facts' }, fact('检测后动作', data.mode === 'guard' ? '确认推理重复后请求停止本轮' : data.mode === 'assist' ? '回合结束后可提交纠正' : '显示告警，不中断输出'), fact('最近监控', time(data.lastMonitoredAt)), fact('磁盘日志', !data.logging.enabled ? '未开启' : data.logging.healthy ? '写入正常' : '写入失败'))), h(ModelScope, { state })),
+              h('dl', { className: 'fs-facts' }, fact('检测后动作', data.mode === 'guard' ? '确认推理重复后请求停止本轮' : data.mode === 'assist' ? '回合结束后可提交纠正' : '显示告警，不中断输出'), fact('最近监控', time(data.lastMonitoredAt)))), h(ModelScope, { state })),
           tab === 'updates' && h('div', { className: 'fs-settings' }, h(Updates, { state }))),
           h('footer', { className: 'fs-footer fs-muted' }, status(label, online && data.monitoring ? 'on' : 'off'), h('time', { dateTime: state.updatedAt || undefined }, `最近同步 ${time(state.updatedAt)}`)))));
         return h(React.Fragment, null, h('div', { className: 'fs-mount', 'data-embedded': String(embedded), ref: mount }), createPortal(content, surface));
+      }
+      function DiskLogging({ state }) {
+        const value = state.logging, logging = state.data?.logging ?? value;
+        return h('section', { className: 'fs-section', 'aria-label': '磁盘日志与历史记录' },
+          h('div', { className: 'fs-section-head' }, h('h3', null, '磁盘日志与历史记录')),
+          h('div', { className: 'fs-setting-row' }, h('div', { className: 'fs-setting-copy' }, h('strong', null, '启用磁盘日志'), h('small', null, '保存监控摘要与检测记录，重启 DSH 后自动恢复')),
+            h(UI.Switch, { label: '启用磁盘日志', checked: Boolean(value?.enabled), disabled: !value?.available || Boolean(state.error || state.loggingReadError) || state.busy, onChange: enabled => controller.action('setDiskLogging', { enabled }) })),
+          h('dl', { className: 'fs-facts' }, fact('保存状态', !value ? '正在读取' : !logging?.enabled ? '未开启 · 新记录仅保留在内存' : logging.healthy ? '已开启 · 自动保存' : '写入失败 · 请检查目录权限或重试开关'),
+            value?.directory && fact('保存目录', h('code', { style: { fontSize: '12px', userSelect: 'text' } }, value.directory)),
+            value && fact('保留范围', `最近 ${value.limit} 条检测记录 / ${value.sessionLimit} 个对话摘要`)),
+          h('p', { className: 'fs-note' }, '仅保存统计、时间与匿名对话标识，不保存对话正文、推理、命令或工具参数。关闭后停止写入，已有文件保留；开启时保存当前内存中的记录。'),
+          value && !value.persistent && h('p', { className: 'fs-note' }, '当前环境无法保存开关状态；重启后按插件配置启用。'),
+          value && !value.available && h('p', { className: 'fs-error', role: 'alert' }, '无法获取 DSH 配置目录，请在插件配置中设置 logDir。'),
+          logging?.restored > 0 && h('p', { className: 'fs-note', role: 'status' }, '已从磁盘恢复历史记录，当前运行状态会重新检测。'),
+          logging?.restoreError && h('p', { className: 'fs-error', role: 'alert' }, '部分历史文件损坏或超出限制，已跳过无法读取的内容；当前监控继续运行。'),
+          (state.loggingError || state.loggingReadError) && h('p', { className: 'fs-error', role: 'alert' }, state.loggingError || state.loggingReadError));
       }
       function OperationSafety({ state }) {
         const value = state.data?.operationSafety;
@@ -453,7 +497,7 @@ window.__ModuleLoader__.load({
               h(Live, { data }),
               h('dl', { className: 'fs-facts' }, fact('模式', modeName(data.mode)), fact('拦截动作', data.latestEvent?.action === 'stop-confirmed' ? `宿主已确认停止（累计请求中断 ${data.cancelRequested} 次）` : data.cancelRequested ? `已请求中断 ${data.cancelRequested} 次，需以宿主结果为准` : '无，未中断模型或工具'), fact('最近监控', time(data.lastMonitoredAt))),
               data.events.length ? h(Events, { events: data.events, mode: data.mode }) : h('p', { className: 'fs-muted' }, data.coverage === 'checked' ? '最近已检查的输出中未发现符合规则的重复。' : '尚无检测事件。'),
-              h('p', { className: 'fs-note' }, '每 2 秒同步。暂未发现循环只描述已收到的输出，不能保证后续不会重复。计数在重新跟踪或插件重载后重置；详情取自全局最近 100 条事件。'))), document.body));
+              h('p', { className: 'fs-note' }, '每 2 秒同步。暂未发现循环只描述已收到的输出，不能保证后续不会重复。开启磁盘日志后，计数与历史在重启后恢复；详情取自全局最近 100 条事件。'))), document.body));
       }
       function Icon() {
         const { data, error } = useState();

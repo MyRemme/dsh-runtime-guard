@@ -12,11 +12,11 @@ it('bounds logs, anonymizes identifiers and drains on unload', async () => {
       for (let i = 0; i < 80; i++) metrics.record({ kind: 'stream-repeat', session: 'secret-session-name', score: 98, confirmed: true, chars: 2000 });
       // Close flushes all admitted events; each store shares the bounded files.
       await metrics.close();
-      count += metrics.counts['stream-repeat'] ?? 0;
+      count = metrics.counts['stream-repeat'] ?? 0;
     }
     const files = await readdir(directory);
-    expect(files.length).toBeLessThanOrEqual(2);
-    for (const file of files) expect((await stat(join(directory, file))).size).toBeLessThanOrEqual(4096);
+    expect(files.length).toBeLessThanOrEqual(3);
+    for (const file of files) expect((await stat(join(directory, file))).size).toBeLessThanOrEqual(file === 'history.json' ? 2_097_152 : 4096);
     const content = await readFile(join(directory, 'events.jsonl'), 'utf8');
     expect(content).not.toContain('secret-session-name');
     expect(content).toContain('stream-repeat');

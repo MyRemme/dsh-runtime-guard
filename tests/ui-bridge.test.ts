@@ -51,6 +51,15 @@ it('restricts operation safety settings to the owner and validates payloads', as
   expect(call('operationSafety').value.enabled).toBe(true);
   expect((await call('setOperationSafety', { enabled: false })).value.enabled).toBe(false);
 });
+it('restricts disk logging settings and directory details to the owner', async () => {
+  const { call } = setup();
+  expect(call('diskLogging', {}, 'guest').error?.code).toBe('FORBIDDEN');
+  expect(call('setDiskLogging', { enabled: true }, 'guest').error?.code).toBe('FORBIDDEN');
+  for (const payload of [{}, { enabled: 'yes' }, { enabled: true, directory: '/elsewhere' }]) expect(call('setDiskLogging', payload).error?.code).toBe('BAD_REQUEST');
+  expect(call('diskLogging', { extra: true }).error?.code).toBe('BAD_REQUEST');
+  expect(call('diskLogging').value).toMatchObject({ available: false, enabled: false });
+  expect((await call('setDiskLogging', { enabled: true })).error?.code).toBe('SETTINGS_FAILED');
+});
 it('restricts model selection to the owner and omits route names from exports', async () => {
   const { api, call } = setup();
   expect(call('modelScope', {}, 'guest').error?.code).toBe('FORBIDDEN');
@@ -80,7 +89,7 @@ it('limits raw conversation navigation ids to the owner UI endpoint and keeps ex
   expect(event.coverage).toBeGreaterThanOrEqual(0.85);
   expect(event.novelty).toBeLessThanOrEqual(0.15);
   host.emit('agent/disposed', { agent });
-  expect(call('conversations').value[0]).toMatchObject({ sessionId: agent.id, tracked: false, confirmed: 1, counterScope: 'retained-events' });
+  expect(call('conversations').value[0]).toMatchObject({ sessionId: agent.id, tracked: false, confirmed: 1, counterScope: 'history' });
   expect(JSON.stringify(call('export').value)).not.toContain('private-ui-navigation');
   expect(JSON.stringify(call('snapshot').value)).not.toContain('private-ui-navigation');
 });
