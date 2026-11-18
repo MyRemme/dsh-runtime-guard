@@ -59,3 +59,16 @@ it('respects the native profile writer lock and cancellation', async () => {
   expect(await readFile(join(directory, 'package.json.lock'), 'utf8')).toBe(`${process.pid}\n`);
   await expect(readFile(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
 });
+it('clears a stale lock left by a dead process and keeps backups bounded', async () => {
+  const { directory, root, workspace } = await fixture();
+  await writeFile(join(directory, 'package.json.lock'), '99999999\n');
+  await writeFile(workspace, 'storeDir: C:/wrong-1\n');
+  await prepareUpgradeEnvironment(directory);
+  expect(parse(await readFile(workspace, 'utf8')).storeDir).toBe(root.replaceAll('\\', '/'));
+  await writeFile(workspace, 'storeDir: C:/wrong-2\n');
+  await prepareUpgradeEnvironment(directory);
+  const backups = await readdir(join(directory, '.runtime-guard/upgrade-backups'));
+  expect(backups.sort()).toEqual(['pnpm-workspace.before-guard.yaml', 'pnpm-workspace.last-repair.yaml']);
+  expect(await readFile(join(directory, '.runtime-guard/upgrade-backups/pnpm-workspace.before-guard.yaml'), 'utf8')).toBe('storeDir: C:/wrong-1\n');
+  expect(await readFile(join(directory, '.runtime-guard/upgrade-backups/pnpm-workspace.last-repair.yaml'), 'utf8')).toBe('storeDir: C:/wrong-2\n');
+});

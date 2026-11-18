@@ -412,6 +412,12 @@ window.__ModuleLoader__.load({
         finally { updateGeneration++; publish({ updateBusy: false }); void refreshUpdates(); }
       }
 
+      function syncActiveTab() {
+        if (!panelMounted) return;
+        if (activeTab === 'monitor') void refreshConversations();
+        if (activeTab === 'settings') { void refreshScope('', false); void refreshLogging(); }
+      }
+
       async function poll() {
         const tasks = [refresh(), ...[...watched.keys()].map(id => refreshSession(id, id))];
         if (panelMounted && activeTab === 'monitor') tasks.push(refreshConversations());
@@ -425,8 +431,7 @@ window.__ModuleLoader__.load({
         panelMounted = mounted;
         activeTab = mounted ? tab : '';
         if (!mounted || prevTab === tab) return;
-        if (tab === 'monitor') void refreshConversations();
-        if (tab === 'settings') { void refreshScope('', false); void refreshLogging(); }
+        syncActiveTab();
         if (tab === 'updates') void refreshUpdates();
       }
 
@@ -454,8 +459,7 @@ window.__ModuleLoader__.load({
         finally {
           generation++; publish({ busy: false });
           void refresh();
-          if (panelMounted && activeTab === 'monitor') void refreshConversations();
-          if (panelMounted && activeTab === 'settings') { void refreshScope('', false); void refreshLogging(); }
+          syncActiveTab();
           for (const id of watched.keys()) void refreshSession(id, id);
         }
       }

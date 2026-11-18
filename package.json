@@ -1,6 +1,6 @@
 {
   "name": "dsh-runtime-guard",
-  "version": "0.2.7",
+  "version": "0.2.8-beta",
   "runtimeGuardUpdater": 1,
   "description": "DSH 运行时护栏：模型防空转与工具越权审批防护插件",
   "type": "module",

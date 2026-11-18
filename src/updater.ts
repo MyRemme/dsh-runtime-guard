@@ -387,25 +387,26 @@ export class Updater implements UpdateAPI {
       return true;
     };
     try {
-      const file = await this.prepareArchive(candidate, task, active);
+      let file = await this.prepareArchive(candidate, task, active);
       if (await yieldIfBusy()) return;
       this.state.phase = 'installing'; await this.save();
       await prepareUpgradeEnvironment(this.options.directory, AbortSignal.any([this.abort.signal, task.abort.signal]));
       if (await yieldIfBusy()) return;
-      // Cancellation is effective until this synchronous handoff. The host owns
-      // an installation already submitted, including plugin disposal during HMR.
-      task.submitted = true;
+      // Cancellation is effective until the synchronous handoff, and resets during retry backoff.
       let result: Awaited<ReturnType<Manager['installBundle']>>;
+      let retrySignal: AbortSignal | undefined;
       for (let attempt = 0; ; attempt++) {
+        task.submitted = true;
         result = await this.options.manager.installBundle(file, { enabled: true, requestId: `${manifest.name}-${randomUUID()}` });
         const transientRename = process.platform === 'win32' && result.application === 'failed' && result.stage === 'install'
           && /\bEPERM\b/.test(result.packageResult?.output ?? '') && /\brename\b[^\n]*package\.json/i.test(result.packageResult?.output ?? '');
         if (!transientRename || attempt >= 2 || this.disposed) break;
-        // Native DSH has restored its manifest/lockfile after this failed run.
-        // Retry only a Windows rename lock, with the same verified archive and idle gate.
-        await delay(250 * (attempt + 1), undefined, { signal: this.abort.signal });
+        task.submitted = false;
+        retrySignal ??= AbortSignal.any([this.abort.signal, task.abort.signal]);
+        await delay(250 * (attempt + 1), undefined, { signal: retrySignal });
         if (await yieldIfBusy()) return;
-        await this.prepareArchive(candidate, task, active);
+        const info = await stat(file).catch(() => null);
+        if (!info || info.size !== candidate.asset.size) file = await this.prepareArchive(candidate, task, active);
       }
       if (!['applied', 'restart-required'].includes(result.application)) return failure(hostInstallFailure(result));
       if (result.version !== candidate.version) return failure('host-version-mismatch');

@@ -63,6 +63,11 @@ const SPECIAL_PATH_PREFIX_RE = /^(?:~(?:$|[/\\])|%[^%]+%|\\{2}|\/\/|file:|\$(?:e
 
 const READ_PS_CMDS = 'get-content|get-item|get-childitem|get-location|get-filehash|get-process|test-path|select-string|select-object|measure-object|compare-object|write-output|write-host|echo|pwd';
 const NESTED_SHELL_WORDS = 'invoke-expression|iex|start-process|saps|cmd(?:\\.exe)?|powershell(?:\\.exe)?|pwsh(?:\\.exe)?|bash|sh|wscript(?:\\.exe)?|cscript(?:\\.exe)?|mshta(?:\\.exe)?';
+const wordPattern = (words: string) => new RegExp(`(?:^|[\\s;&|({"'])(?:${words})(?=$|[\\s;|&)}"'])`, 'i');
+const DESTRUCTIVE_CMD_RE = wordPattern('remove-item|ri|rm|del|erase|rmdir|rd|unlink|clear-content|format(?:\\.com)?|diskpart|bcdedit|takeown|icacls');
+const MODIFIES_CMD_RE = wordPattern('set-content|add-content|out-file|new-item|ni|copy-item|cp|copy|move-item|mv|move|rename-item|ren|mkdir|md|touch|tee|set-item|set-itemproperty|remove-itemproperty|new-itemproperty|clear-itemproperty|set-acl|set-service|stop-service|restart-service|set-ciminstance|invoke-cimmethod');
+const DEV_NESTED_SHELL_RE = wordPattern(NESTED_SHELL_WORDS);
+const OPAQUE_CMD_RE = wordPattern(`${NESTED_SHELL_WORDS}|python(?:3|\\.exe)?|node(?:\\.exe)?`);
 const READ_PIPE_RE = new RegExp(`^(?:${READ_PS_CMDS}|ls|cat|head|tail|stat|wc|rg|grep)(?:\\s|$)`, 'i');
 const STRICT_READ_RE = /^(?:get-content|get-item|get-childitem|get-location|get-filehash|test-path|select-string|pwd)(?:\s|$)/i;
 const ORDINARY_PS_RE = new RegExp(`^(?:${READ_PS_CMDS}|set-content|add-content|out-file|new-item|copy-item|move-item|rename-item)(?:\\s|$)`, 'i');
@@ -352,11 +357,9 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
     || /\b(?:start-process|saps)\b[\s\S]*?-(?:verb|v)\s+['"]?runas\b/.test(text)
     || /\bschtasks(?:\.exe)?\b[\s\S]*?\/(?:create|change)\b/.test(text)
     || /\bsc(?:\.exe)?\s+(?:create|config)\b/.test(text)) return { kind: 'deny', rule: 'elevation' };
-  const commandWordIn = (target: string, words: string) => new RegExp(`(?:^|[\\s;&|({"'])${words}(?=$|[\\s;|&)}"'])`, 'i').test(target);
-  const commandWord = (words: string) => commandWordIn(text, words);
-  const destructive = commandWord('(?:remove-item|ri|rm|del|erase|rmdir|rd|unlink|clear-content|format(?:\\.com)?|diskpart|bcdedit|takeown|icacls)')
+  const destructive = DESTRUCTIVE_CMD_RE.test(text)
     || /\breg(?:\.exe)?\s+(?:add|delete|import|restore)\b|\bgit\s+(?:reset\b[^\r\n]*--hard|clean\b|push\b[^\r\n]*--force)/.test(text);
-  const modifies = destructive || commandWord('(?:set-content|add-content|out-file|new-item|ni|copy-item|cp|copy|move-item|mv|move|rename-item|ren|mkdir|md|touch|tee|set-item|set-itemproperty|remove-itemproperty|new-itemproperty|clear-itemproperty|set-acl|set-service|stop-service|restart-service|set-ciminstance|invoke-cimmethod)')
+  const modifies = destructive || MODIFIES_CMD_RE.test(text)
     || /(?:^|[^<])>{1,2}|\bgit\s+(?:add|commit|checkout|switch|restore|merge|rebase|cherry-pick|revert|stash|pull|fetch|config)\b|\bgit\s+[\s\S]*--output(?:=|\s)/.test(text);
   const literalRead = !modifies && !/[`$;&<>(){}\r\n]/.test(command) && !/--(?:pre|ext-diff|textconv|output)\b/i.test(command)
     && splitUnquotedPipes(command).every(part => READ_PIPE_RE.test(part.trim()) || /^git\s+(?:status|diff|log|show|ls-files|ls-tree|rev-parse)(?:\s|$)/i.test(part.trim()));
@@ -376,9 +379,9 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
   const unquoted = command.replace(/'[^']*'|"([^"]*)"/g, (whole, dbl: string | undefined) => (dbl?.includes('$') ? whole : ' '));
   const development = /^(?:npm(?:\.cmd)?|pnpm(?:\.cmd)?|npx(?:\.cmd)?|yarn(?:\.cmd)?|bun|node(?:\.exe)?|python(?:3|\.exe)?|py|pytest|tsc|vitest|jest|go|cargo|dotnet|cmake|make|git)(?:\s|$)/i.test(command.trim());
   if (development && !/[;&|`\r\n]/.test(command) && !/\$\(|[<>]\(/.test(command) && !hasExpandableDollar(command)
-    && !commandWordIn(unquoted, `(?:${NESTED_SHELL_WORDS})`)
+    && !DEV_NESTED_SHELL_RE.test(unquoted)
     && !/-(?:encodedcommand|enc|ec)\b|frombase64string|shell\.application/.test(unquoted)) return { kind: 'allow' };
-  if (commandWord(`(?:${NESTED_SHELL_WORDS}|python(?:3|\\.exe)?|node(?:\\.exe)?)`)
+  if (OPAQUE_CMD_RE.test(text)
     || /-(?:encodedcommand|enc|ec|e)\b|frombase64string|shell\.application|(?:^|[\s;])(?:&|\.)\s|\$\(|\.(?:ps1|bat|cmd|vbs|js|py)(?:\s|['"]|$)/.test(text)) return { kind: 'ask', rule: 'opaque-execution' };
   return ORDINARY_PS_RE.test(command.trim()) && !/[;&|`(){}\r\n]/.test(command) && !hasExpandableDollar(command) && !/\.(?:ps1|bat|cmd|exe)\b/i.test(command)
     ? { kind: 'allow' } : { kind: 'ask', rule: 'opaque-execution' };

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, normalize, basename } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -7,6 +6,8 @@ import { PROFILE_DIR, writeProfileFile } from './profile-file.js';
 
 export class UpgradeEnvironmentError extends Error {}
 
+const STALE_LOCK_MS = 60_000;
+
 async function optionalText(file: string, limit: number): Promise<string | undefined> {
   try {
     if ((await stat(file)).size > limit) throw new UpgradeEnvironmentError('host-store-config');
@@ -14,6 +15,30 @@ async function optionalText(file: string, limit: number): Promise<string | undef
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+async function tryClearStaleLock(lockFile: string): Promise<boolean> {
+  try {
+    const info = await stat(lockFile);
+    const text = await readFile(lockFile, 'utf8').catch(() => '');
+    const pid = Number(text.trim());
+    const deadOwner = Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid && !isProcessAlive(pid);
+    const expiredMalformed = (!Number.isSafeInteger(pid) || pid <= 0) && Date.now() - info.mtimeMs >= STALE_LOCK_MS;
+    if (!deadOwner && !expiredMalformed) return false;
+    await unlink(lockFile).catch(() => {});
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
   }
 }
 
@@ -26,13 +51,15 @@ export async function withUpgradeProfileLock<T>(directory: string, run: () => Pr
     signal?.throwIfAborted();
     try { lock = await open(lockFile, 'wx', 0o600); break; }
     catch (error) {
-      if (!['EEXIST', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      const code = (error as NodeJS.ErrnoException).code ?? '';
+      if (!['EEXIST', 'EPERM'].includes(code)) throw error;
+      if (code === 'EEXIST' && await tryClearStaleLock(lockFile)) continue;
       if (Date.now() >= deadline) throw new UpgradeEnvironmentError('host-profile-busy');
       await delay(100, undefined, signal ? { signal } : undefined);
     }
   }
   try { await lock.writeFile(`${process.pid}\n`); signal?.throwIfAborted(); return await run(); }
-  finally { await lock.close(); await unlink(lockFile); }
+  finally { await lock.close().catch(() => {}); await unlink(lockFile).catch(() => {}); }
 }
 
 function document(text: string) {
@@ -73,7 +100,9 @@ async function prepare(directory: string, signal?: AbortSignal): Promise<void> {
     if (before !== undefined) {
       const backups = join(directory, PROFILE_DIR, 'upgrade-backups');
       await mkdir(backups, { recursive: true });
-      await copyFile(workspace, join(backups, `pnpm-workspace-${randomUUID()}.yaml`));
+      const initialBackup = join(backups, 'pnpm-workspace.before-guard.yaml');
+      if (await optionalText(initialBackup, 1024 * 1024) === undefined) await copyFile(workspace, initialBackup);
+      await copyFile(workspace, join(backups, 'pnpm-workspace.last-repair.yaml'));
     }
     // Cooperate with native package writers and refuse an unrelated concurrent edit.
     if (await optionalText(workspace, 1024 * 1024) !== before) throw new UpgradeEnvironmentError('host-profile-busy');

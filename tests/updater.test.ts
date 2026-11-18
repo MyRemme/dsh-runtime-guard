@@ -394,6 +394,18 @@ it.skipIf(process.platform !== 'win32')('retries a transient native manifest ren
   expect(installBundle).toHaveBeenCalledTimes(2);
   expect(installBundle.mock.calls[0]?.[0]).toBe(installBundle.mock.calls[1]?.[0]);
 });
+it.skipIf(process.platform !== 'win32')('aborts a Windows manifest rename retry immediately when automatic updates are disabled', async () => {
+  const { updater, installBundle } = await setup();
+  installBundle.mockResolvedValueOnce({ application: 'failed', stage: 'install', packageResult: {
+    kind: 'permission', output: "[EPERM] EPERM: operation not permitted, rename 'profile/package.json.tmp' -> 'profile/package.json'",
+  } });
+  await updater.setAutomatic(true);
+  await vi.waitFor(() => expect(installBundle).toHaveBeenCalledTimes(1));
+  await updater.setAutomatic(false);
+  await settled(updater);
+  expect(installBundle).toHaveBeenCalledTimes(1);
+  expect(updater.status()).toMatchObject({ automatic: false, phase: 'available', error: null });
+});
 it('does not retry a permission failure without an explicit transient manifest rename', async () => {
   const { updater, installBundle } = await setup();
   installBundle.mockResolvedValueOnce({ application: 'failed', stage: 'install', packageResult: { kind: 'permission', output: 'EACCES: access denied' } });
