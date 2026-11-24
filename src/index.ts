@@ -17,7 +17,7 @@ export const name = 'runtime-guard';
 export const inject = ['agents', 'llm', 'tools'];
 export interface RuntimeGuardAPI {
   status(): {
-    compatibility: ReturnType<typeof compatibilityFor>; mode: Settings['mode']; sessions: number; counts: Record<string, number>;
+    compatibility: ReturnType<typeof compatibilityFor>; mode: Settings['mode']; guardStopText: boolean; sessions: number; counts: Record<string, number>;
     monitoring: boolean; startedAt: string; monitoredRequests: number; finishedRequests: number; activeRequests: number; lastMonitoredAt: string | null;
     modelScope: ReturnType<ModelScopeStore['summary']>;
     confirmed: number; recoverySubmitted: number; events: ReturnType<MetricsStore['snapshot']>['events']; logging: ReturnType<MetricsStore['snapshot']>['logging'];
@@ -36,6 +36,7 @@ export interface RuntimeGuardAPI {
   conversations(): ({ sessionId: string; sessionKey: string; tracked: boolean } & ReturnType<RuntimeGuardAPI['sessionStatus']>)[];
   setMonitoring(enabled: boolean): void;
   setMode(mode: 'observe' | 'assist' | 'guard'): Promise<ReturnType<RuntimeGuardAPI['status']>>;
+  setGuardStopText(enabled: boolean): Promise<ReturnType<RuntimeGuardAPI['status']>>;
   modelScope(): ReturnType<ModelScopeStore['view']>;
   setModelScope(input: unknown): Promise<ReturnType<ModelScopeStore['view']>>;
   refreshModels(): Promise<ReturnType<ModelScopeStore['view']>>;
@@ -43,6 +44,7 @@ export interface RuntimeGuardAPI {
   setSessionEnabled(sessionId: string, enabled: boolean): void;
   operationSafety(): SafetyStatus;
   setOperationSafety(enabled: boolean): Promise<SafetyStatus>;
+  setGuardFullAccessElevation(enabled: boolean): Promise<SafetyStatus>;
   diskLogging(): ReturnType<MetricsStore['loggingSettings']>;
   setDiskLogging(enabled: boolean): Promise<ReturnType<MetricsStore['loggingSettings']>>;
 }
@@ -64,8 +66,15 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
   if (!config.enabled) return;
   const profile = ctx.get?.('profileContext', false) as { installAnchor?: string; dir?: string } | undefined;
   const detected = detectHostVersion(profile?.installAnchor);
+  const warn = (message: string) => { try { ctx.logger?.warn(message); } catch { /* Logging is optional. */ } };
+  const metrics = new MetricsStore(config.logDir, config.maxLogBytes, () => warn('runtime-guard: diagnostic logging disabled after an I/O error'), {
+    ...(profile?.dir ? { profileDirectory: profile.dir } : {}), sessionLimit: config.maxSessions,
+  });
   // Only detected metadata unlocks safety; hostVersion is merely a monitor hint.
-  const operationSafety = new OperationSafety(ctx, config.operationSafety, detected ?? '', profile?.dir);
+  const operationSafety = new OperationSafety(ctx, config.operationSafety, detected ?? '', profile?.dir, {
+    logDir: metrics.loggingSettings().directory,
+    isLoggingEnabled: () => metrics.loggingSettings().enabled,
+  });
   const compatibility = profile?.installAnchor
     ? compatibilityFor(detected ?? config.hostVersion ?? '')
     : compatibilityFor(config.hostVersion || detected || '');
@@ -80,29 +89,33 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
       compatibility.reason = 'host-version-mismatch';
     }
   }
-  const modeStore = new ProfileJsonStore<Settings['mode']>({
+  interface ModeSettings { mode: Settings['mode']; guardStopText: boolean }
+  const modeStore = new ProfileJsonStore<ModeSettings>({
     directory: profile?.dir,
     subpath: ['mode.json'],
     maxBytes: 65536,
-    defaultValue: config.mode,
-    parse: raw => (raw && typeof raw === 'object' && !Array.isArray(raw)
-      && ['observe', 'assist', 'guard'].includes((raw as { mode?: unknown }).mode as string)
-      ? (raw as { mode: Settings['mode'] }).mode : undefined),
-    serialize: mode => JSON.stringify({ mode }, null, 2) + '\n',
+    defaultValue: { mode: config.mode, guardStopText: config.guardStopText },
+    parse: raw => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+      const rec = raw as { mode?: unknown; guardStopText?: unknown };
+      if (!['observe', 'assist', 'guard'].includes(rec.mode as string)) return undefined;
+      if (Object.hasOwn(rec, 'guardStopText') && rec.guardStopText !== undefined && typeof rec.guardStopText !== 'boolean') return undefined;
+      return {
+        mode: rec.mode as Settings['mode'],
+        guardStopText: Object.hasOwn(rec, 'guardStopText') && rec.guardStopText !== undefined ? Boolean(rec.guardStopText) : config.guardStopText,
+      };
+    },
+    serialize: value => JSON.stringify(value.guardStopText ? { mode: value.mode, guardStopText: true } : { mode: value.mode }, null, 2) + '\n',
   });
   const modeFor = (requested: Settings['mode']): Settings['mode'] =>
     requested === 'auto' ? (compatibility.intervention ? 'auto' : compatibility.guard ? 'guard' : 'observe')
     : requested === 'guard' && !compatibility.guard ? 'observe' : requested;
-  let effectiveMode = modeFor(modeStore.value);
+  let effectiveMode = modeFor(modeStore.value.mode);
   const states = new Map<string, SessionState>();
   const disabledSessions = new Set<string>(config.disabledSessions);
   let disposed = false;
   let monitoring = true;
   const startedAt = new Date().toISOString();
-  const warn = (message: string) => { try { ctx.logger?.warn(message); } catch { /* Logging is optional. */ } };
-  const metrics = new MetricsStore(config.logDir, config.maxLogBytes, () => warn('runtime-guard: diagnostic logging disabled after an I/O error'), {
-    ...(profile?.dir ? { profileDirectory: profile.dir } : {}), sessionLimit: config.maxSessions,
-  });
   const report = (event: Notice) => {
     const safe = metrics.record(event);
     const state = states.get(event.session);
@@ -220,7 +233,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
         const origin = { turn: state.turn, step: state.step }, noticeKeys = new Set<string>();
         const emitRepeat = (evidence: RepeatEvidence & { contentType: 'reasoning' | 'text' }) => {
           const willIntervene = evidence.confirmed && !evidence.uncertainty && effectiveMode !== 'observe'
-            && (effectiveMode !== 'guard' || evidence.contentType === 'reasoning')
+            && (effectiveMode !== 'guard' || evidence.contentType === 'reasoning' || (modeStore.value.guardStopText && evidence.contentType === 'text'))
             && selected(options) && !signal.aborted && signal === state.signal && origin.turn === state.turn && origin.step === state.step
             && state.agent === states.get(state.agent.id)?.agent && monitoring && state.enabled;
           const key = `${evidence.contentType}/${evidence.uncertainty ? 'uncertain' : evidence.confirmed ? 'confirmed' : 'suspected'}`;
@@ -357,7 +370,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
         .sort((a, b) => b.activeRequests - a.activeRequests || (b.lastMonitoredAt ?? '').localeCompare(a.lastMonitoredAt ?? ''));
     },
     status: () => ({
-      compatibility: { ...compatibility }, mode: effectiveMode, sessions: states.size, counts: { ...metrics.counts },
+      compatibility: { ...compatibility }, mode: effectiveMode, guardStopText: modeStore.value.guardStopText, sessions: states.size, counts: { ...metrics.counts },
       modelScope: modelScope.summary(),
       monitoring: monitoring && !disposed, startedAt, ...metrics.requestTotals(),
       activeRequests: [...states.values()].filter(state => state.request).length,
@@ -374,7 +387,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
     setMode: nextMode => {
       if (!['observe', 'assist', 'guard'].includes(nextMode)) return Promise.reject(new TypeError('invalid mode'));
       if (nextMode === 'guard' && !compatibility.guard) return Promise.reject(new Error('guard mode unavailable'));
-      return modeStore.update(nextMode, {
+      return modeStore.transform(current => ({ ...current, mode: nextMode }), {
         afterWrite: () => {
           effectiveMode = modeFor(nextMode);
           recovery.setMode(effectiveMode);
@@ -382,11 +395,23 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
         },
       });
     },
+    setGuardStopText: enabled => {
+      if (typeof enabled !== 'boolean') return Promise.reject(new TypeError('expected enabled boolean'));
+      return modeStore.transform(current => ({ ...current, guardStopText: enabled }), {
+        afterWrite: () => api.status(),
+      });
+    },
     modelScope: () => modelScope.view(),
     operationSafety: () => operationSafety.status(),
     setOperationSafety: enabled => operationSafety.setEnabled(enabled),
+    setGuardFullAccessElevation: enabled => operationSafety.setGuardFullAccessElevation(enabled),
     diskLogging: () => metrics.loggingSettings(),
-    setDiskLogging: enabled => disposed ? Promise.reject(new Error('settings unavailable')) : metrics.setEnabled(enabled),
+    setDiskLogging: enabled => disposed
+      ? Promise.reject(new Error('settings unavailable'))
+      : metrics.setEnabled(enabled).then(async result => {
+        await operationSafety.syncLogging(enabled);
+        return result;
+      }),
     setModelScope: input => modelScope.set(input),
     refreshModels: () => modelScope.refresh((ctx.get?.('llm', false) ?? ctx.llm) as ModelCatalog | undefined),
     selfTest: () => {
@@ -414,7 +439,7 @@ export function apply(ctx: HostContext, input: Partial<Settings> = {}): void {
       && api.status().activeRequests === 0;
   });
   registerUI(ctx, api, updates);
-  if (modeStore.value !== effectiveMode) warn(config.language === 'zh' ? 'DSH Runtime Guard：此版本尚未通过所选干预模式验证，已使用观察模式。' : 'DSH Runtime Guard: selected intervention is not verified; using observation mode.');
+  if (modeStore.value.mode !== effectiveMode) warn(config.language === 'zh' ? 'DSH Runtime Guard：此版本尚未通过所选干预模式验证，已使用观察模式。' : 'DSH Runtime Guard: selected intervention is not verified; using observation mode.');
   metrics.record({ kind: 'compatibility', session: '', score: 0, confirmed: false, chars: 0, action: compatibility.reason });
   try { ctx.logger?.info(`runtime-guard: DSH ${compatibility.version}; ${compatibility.adapter}; ${effectiveMode}; ${compatibility.reason}`); } catch { /* Optional logger. */ }
   ctx.effect(() => async () => { disposed = true; recovery.dispose(); states.clear(); await modeStore.close(); await modelScope.close(); await metrics.close(); }, 'runtime-guard: stop and drain');

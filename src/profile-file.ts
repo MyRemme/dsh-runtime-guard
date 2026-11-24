@@ -8,23 +8,32 @@ export const PROFILE_DIR = '.runtime-guard';
 export const LEGACY_PROFILE_DIR = '.flash-stabilizer';
 
 /** Read a bounded JSON profile file, falling back once to the legacy directory. */
-export function readProfileJsonSync(directory: string, maxBytes: number, ...subpath: string[]): unknown {
+export function readProfileJsonWithOriginSync(
+  directory: string,
+  maxBytes: number,
+  ...subpath: string[]
+): { value: unknown; fromLegacy: boolean } | undefined {
   const readOne = (base: string): unknown => {
     const file = join(directory, base, ...subpath);
     if (statSync(file).size > maxBytes) throw new Error('oversized settings');
     return JSON.parse(readFileSync(file, 'utf8'));
   };
   try {
-    return readOne(PROFILE_DIR);
+    return { value: readOne(PROFILE_DIR), fromLegacy: false };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   try {
-    return readOne(LEGACY_PROFILE_DIR);
+    return { value: readOne(LEGACY_PROFILE_DIR), fromLegacy: true };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
+}
+
+/** Read a bounded JSON profile file, falling back once to the legacy directory. */
+export function readProfileJsonSync(directory: string, maxBytes: number, ...subpath: string[]): unknown {
+  return readProfileJsonWithOriginSync(directory, maxBytes, ...subpath)?.value;
 }
 
 /** Keep the previous settings intact until the complete replacement is ready. */
@@ -78,6 +87,7 @@ export class ProfileJsonStore<T> {
   disposed = false;
   private readonly serialize: (value: T) => string;
   private readonly disposedMessage: string;
+  private updatedByCaller = false;
 
   constructor(options: ProfileStoreOptions<T>) {
     this.value = options.defaultValue;
@@ -90,11 +100,19 @@ export class ProfileJsonStore<T> {
     if (!options.directory || !options.subpath) return;
     this.file = join(options.directory, PROFILE_DIR, ...options.subpath);
     try {
-      const saved = readProfileJsonSync(options.directory, options.maxBytes ?? 4096, ...options.subpath);
+      const saved = readProfileJsonWithOriginSync(options.directory, options.maxBytes ?? 4096, ...options.subpath);
       if (saved !== undefined) {
-        const parsed = options.parse(saved);
+        const parsed = options.parse(saved.value);
         if (parsed === undefined) throw new Error('invalid settings');
         this.value = parsed;
+        if (saved.fromLegacy) {
+          const target = this.file;
+          const content = this.serialize(parsed);
+          void this.queue.run(async () => {
+            if (this.disposed || this.updatedByCaller) return;
+            await writeProfileFile(target, content);
+          }).catch(() => {});
+        }
       }
     } catch {
       this.loadError = true;
@@ -111,9 +129,21 @@ export class ProfileJsonStore<T> {
       afterWrite?: (value: T) => Promise<R> | R;
     },
   ): Promise<R> {
+    return this.transform(() => next, options);
+  }
+
+  transform<R = T>(
+    fn: (current: T) => T,
+    options?: {
+      beforeWrite?: () => void;
+      afterWrite?: (value: T) => Promise<R> | R;
+    },
+  ): Promise<R> {
+    this.updatedByCaller = true;
     return this.queue.run(async () => {
       if (this.disposed) throw new Error(this.disposedMessage);
       options?.beforeWrite?.();
+      const next = fn(this.value);
       if (this.file) await writeProfileFile(this.file, this.serialize(next));
       this.value = next;
       this.loadError = false;

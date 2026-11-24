@@ -35,4 +35,17 @@ describe('tool evidence', () => {
     const result = { isError: false, get content(): string { throw new TypeError('fixture failure'); } };
     expect(() => new ProgressGuard(4).record({ name: 'read', arguments: {} }, result)).toThrow(TypeError);
   });
+  it('normalizes transient timestamps, UUIDs, and durations when detecting repeated tool outputs', () => {
+    const guard = new ProgressGuard(3);
+    const exec = { name: 'pwsh', arguments: { command: 'npm test' } };
+    const samples = [
+      { isError: true, content: 'Run 11111111-1111-4111-8111-111111111111 at 2026-11-24T10:00:01.123Z (12:00:01) failed in 342ms' },
+      { isError: true, content: 'Run 22222222-2222-4222-8222-222222222222 at 2026-11-24T10:00:05.456Z (12:00:05) failed in 415ms' },
+      { isError: true, content: 'Run 33333333-3333-4333-8333-333333333333 at 2026-11-24T10:00:09.789Z (12:00:09) failed in 502 ms' },
+    ];
+    expect(guard.record(exec, samples[0]!).repeated).toBe(false);
+    expect(guard.record(exec, samples[1]!).repeated).toBe(false);
+    expect(guard.record(exec, samples[2]!)).toMatchObject({ repeated: true, count: 3, failed: true, codeEvidence: 'unchanged-output' });
+    expect(guard.record(exec, { isError: false, content: 'All tests passed in 120ms' })).toMatchObject({ repeated: false, count: 1, codeEvidence: 'changed-output' });
+  });
 });

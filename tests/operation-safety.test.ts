@@ -365,3 +365,99 @@ it('guards dsh-ops file tools, ops_batch, run_code and large outside-workspace a
   expect((await f.run(f.execution('', 'write', { path: 'C:\\outside\\big.txt', content: huge }))).kind).toBe('executed');
   expect(f.requests.at(-1)?.reason).toContain('预览已截断');
 });
+
+it('blocks env drive reads, inline interpreter code, abbreviated elevation, and risky workspace scripts', async () => {
+  const workspace = await directory();
+  await writeFile(join(workspace, 'elevate.ps1'), 'Start-Process cmd.exe -Verb RunAs\n');
+  await writeFile(join(workspace, 'wipe.sh'), 'rm -rf ./src\n');
+  await writeFile(join(workspace, 'build.sh'), 'npm run build\n');
+
+  const f = fixture();
+  let currentMode = 'read-only';
+  f.policy.resolve.mockImplementation(() => ({ mode: currentMode, workspaceRoot: workspace }));
+  for (const cmd of ['ls env:', 'Get-ChildItem env:', 'Get-Item env:OPENAI_API_KEY']) {
+    expect((await f.run(f.execution(cmd))).kind).toBe('deny');
+  }
+  expect(assessCommand('ls env:', 'read-only', workspace, workspace)).toEqual({ kind: 'ask', rule: 'read-only-unknown' });
+
+  currentMode = 'workspace-write';
+  for (const cmd of ['ls env:', 'Get-ChildItem env:']) {
+    expect(assessCommand(cmd, 'workspace-write', workspace, workspace)).toEqual({ kind: 'ask', rule: 'opaque-execution' });
+  }
+  expect(assessCommand('node -e "require(\'fs\').rmSync(\'.\', {recursive:true})"', 'workspace-write', workspace, workspace)).toEqual({ kind: 'ask', rule: 'destructive' });
+  expect(assessCommand('python -c "import shutil; shutil.rmtree(\'src\')"', 'workspace-write', workspace, workspace)).toEqual({ kind: 'ask', rule: 'destructive' });
+  expect(assessCommand('node -e "console.log(1)"', 'workspace-write', workspace, workspace)).toEqual({ kind: 'ask', rule: 'opaque-execution' });
+  expect(assessCommand('node script.js', 'workspace-write', workspace, workspace)).toEqual({ kind: 'allow' });
+  expect(assessCommand('python export_conversation.py -c cfg.json', 'workspace-write', workspace, workspace)).toEqual({ kind: 'allow' });
+
+  for (const cmd of [
+    'Start-Process cmd.exe -ve RunAs',
+    'start cmd.exe -ver runas',
+    'wmic process call create cmd.exe',
+    'net localgroup administrators user /add',
+  ]) {
+    expect((await f.run(f.execution(cmd))).kind).toBe('deny');
+    expect(f.safety.status().events[0]?.rule).toBe('elevation');
+  }
+
+  expect((await f.run(f.execution('', 'ops_bash', { script_path: 'elevate.ps1', workdir: workspace }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('elevation');
+  expect((await f.run(f.execution('', 'ops_bash', { script_path: 'wipe.sh', workdir: workspace }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('destructive');
+  expect((await f.run(f.execution('', 'ops_bash', { script_path: 'build.sh', workdir: workspace }))).kind).toBe('executed');
+  expect(f.requests.at(-1)?.reason).toContain('摘要：工具 ops_bash');
+});
+
+it('supports compatible 0.2.x hosts, optional full-access elevation guard, legacy migration write-back, and redacted history', async () => {
+  expect(fixture({ version: '0.2.2-rc.2' }).safety.status().state).toBe('active');
+  expect(fixture({ version: '0.1.7-rc.2' }).safety.status()).toMatchObject({ state: 'blocked', reason: 'host-unverified' });
+  expect(fixture({ version: '9.9.9' }).safety.status()).toMatchObject({ state: 'blocked', reason: 'host-unverified' });
+
+  const f = fixture();
+  f.setMode('danger-full-access');
+  expect((await f.run(f.execution('Start-Process cmd.exe -Verb RunAs'))).kind).toBe('executed');
+  await f.safety.setGuardFullAccessElevation(true);
+  expect((await f.run(f.execution('Start-Process cmd.exe -Verb RunAs'))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('elevation');
+  expect((await f.run(f.execution('Remove-Item C:\\outside\\fixture'))).kind).toBe('executed');
+
+  // Legacy migration persists to .runtime-guard/operation-safety.json so deleting .flash-stabilizer keeps it active.
+  const migratedDir = await directory();
+  await mkdir(join(migratedDir, '.flash-stabilizer'), { recursive: true });
+  await writeFile(join(migratedDir, '.flash-stabilizer/operation-safety.json'), JSON.stringify({ enabled: true }));
+  const firstBoot = fixture({ profile: migratedDir, enabled: false });
+  await firstBoot.safety.close();
+  expect(JSON.parse(await readFile(join(migratedDir, '.runtime-guard/operation-safety.json'), 'utf8'))).toEqual({ enabled: true });
+  await rm(join(migratedDir, '.flash-stabilizer'), { recursive: true, force: true });
+  const afterDelete = fixture({ profile: migratedDir, enabled: false });
+  expect(afterDelete.safety.status()).toMatchObject({ enabled: true, state: 'active' });
+
+  // Safety counters & redacted events persist when disk logging is enabled.
+  const hostDir = await directory();
+  const anchor = join(hostDir, 'package.json');
+  await writeFile(anchor, '{}');
+  for (const pkg of ['dsh-agent', 'dsh-llm', 'dsh-tools']) {
+    const pkgDir = join(hostDir, 'node_modules/@deepseek-ai', pkg);
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(join(pkgDir, 'package.json'), JSON.stringify({ version: '0.2.2-rc.1' }));
+  }
+  const boot = () => {
+    const host = new FakeHost(); hosts.push(host);
+    host.values.set('tools', { guard: () => () => {} });
+    host.values.set('approval', { request: vi.fn(async () => 'rejected') });
+    host.values.set('sandboxPolicy', { resolve: () => ({ mode: 'workspace-write', workspaceRoot: 'D:\\project' }) });
+    const origGet = host.get.bind(host);
+    host.get = (name: string, strict = true) => name === 'profileContext' ? strict ? undefined : { dir: hostDir, installAnchor: anchor } : origGet(name);
+    apply(host, { operationSafety: true });
+    return { host, api: host.values.get('runtimeGuard') as RuntimeGuardAPI };
+  };
+  const h1 = boot();
+  await h1.api.setDiskLogging(true);
+  await h1.host.waterfall('tools/pre-execute', [{ name: 'pwsh', arguments: { command: 'Start-Process cmd -Verb RunAs D:\\secret.txt' }, callId: 'c1', agent: makeAgent('raw-safety-secret'), signal: new AbortController().signal }], async () => ({ kind: 'allow' }));
+  await h1.host.close();
+  const savedSafety = await readFile(join(hostDir, '.runtime-guard/logs/safety-history.json'), 'utf8');
+  expect(savedSafety).not.toMatch(/secret\.txt|raw-safety-secret|RunAs/);
+  const h2 = boot();
+  expect(h2.api.operationSafety()).toMatchObject({ loggingPersisted: true, checked: 1, denied: 1 });
+  expect(h2.api.operationSafety().events[0]?.rule).toBe('elevation');
+});

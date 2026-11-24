@@ -2,6 +2,33 @@ import { createHash } from 'node:crypto';
 import type { ToolExecution, ToolResult } from './types.js';
 
 class FingerprintLimitError extends RangeError {}
+const ISO_TS_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g;
+const TIME_RE = /\b\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?\b/g;
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const DUR_RE = /\b\d+(?:\.\d+)?\s*(?:ms|msec|seconds?|secs?)\b/gi;
+
+function normalizeDynamicText(text: string): string {
+  return text
+    .replace(ISO_TS_RE, '<TS>')
+    .replace(TIME_RE, '<TIME>')
+    .replace(UUID_RE, '<UUID>')
+    .replace(DUR_RE, '<DUR>');
+}
+
+function normalizeOutput(value: unknown): unknown {
+  let nodes = 0;
+  function walk(input: unknown, depth: number): unknown {
+    if (++nodes > 20000 || depth > 32) throw new FingerprintLimitError('fingerprint input too large');
+    if (typeof input === 'string') return normalizeDynamicText(input);
+    if (Array.isArray(input)) return input.map(v => walk(v, depth + 1));
+    if (input && typeof input === 'object') {
+      return Object.fromEntries(Object.entries(input).map(([k, v]) => [k, walk(v, depth + 1)]));
+    }
+    return input;
+  }
+  return walk(value, 0);
+}
+
 /** Exact JSON canonicalization; never lowercases paths, commands, or values. */
 export function fingerprint(value: unknown): string {
   let nodes = 0;
@@ -24,7 +51,7 @@ export class ProgressGuard {
     let call: string | undefined, output: string;
     try {
       call = fingerprint([exec.name, exec.arguments]);
-      output = fingerprint([result.isError, result.content, result.value, result.error]);
+      output = fingerprint(normalizeOutput([result.isError, result.content, result.value, result.error]));
     } catch (error) {
       if (!(error instanceof FingerprintLimitError)) throw error;
       // Unknown output is a gap in evidence, not another copy of the previous

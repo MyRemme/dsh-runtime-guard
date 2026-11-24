@@ -80,3 +80,14 @@ it('triggers guard cancel on the third consecutive short identical reasoning ste
   expect(cancel).toHaveBeenCalledTimes(1);
   expect(api.sessionStatus(agent.id).confirmed).toBe(1);
 });
+it('stops confirmed text repetition in guard mode only when guardStopText is enabled', async () => {
+  const { host, api } = setup('guard');
+  const agent = { ...makeAgent('guard-text'), cancel: vi.fn(), followup: vi.fn() };
+  await stream(host, agent, chunks(repeated, 73, 'text'), true);
+  expect(agent.cancel).not.toHaveBeenCalled();
+
+  await api.setGuardStopText(true);
+  expect(api.status().guardStopText).toBe(true);
+  await stream(host, agent, chunks(repeated, 73, 'text'), true);
+  expect(agent.cancel).toHaveBeenCalledTimes(1);
+});

@@ -619,3 +619,44 @@ it('shows clear version diagnostic messages for guard unavailability and host-un
   expect(document.querySelector('[role="alert"]').textContent).toContain('0.2.1-rc.4');
   expect(document.querySelector('[role="alert"]').textContent).toContain('0.2.1-rc.2、0.2.2-rc.1');
 });
+it('toggles guardFullAccessElevation, guardStopText, and reduces polling frequency when idle', async () => {
+  const data = { ...baseline(), compatibility: { version: '0.2.2-rc.1', guard: true }, guardStopText: false,
+    operationSafety: { enabled: true, guardFullAccessElevation: false, state: 'active', hostVersion: '0.2.2-rc.1',
+      verifiedHosts: ['0.2.1-rc.2', '0.2.2-rc.1'], coveredTools: ['pwsh'], persistent: true, loggingPersisted: true,
+      checked: 0, denied: 0, approvalRequests: 0, approved: 0, events: [] } };
+  let snapshotCalls = 0;
+  const call = vi.fn(async (_channel, method, payload) => {
+    if (method === 'snapshot') snapshotCalls++;
+    if (method === 'setGuardFullAccessElevation') {
+      data.operationSafety.guardFullAccessElevation = payload.enabled;
+      return { ok: true, value: structuredClone(data.operationSafety) };
+    }
+    if (method === 'setGuardStopText') {
+      data.guardStopText = payload.enabled;
+      return { ok: true, value: structuredClone(data) };
+    }
+    return { ok: true, value: method === 'conversations' ? [] : structuredClone(data) };
+  });
+  const { slots } = await mount(call);
+  await selectTab('操作防护');
+  expect(document.body.textContent).toContain('计数与脱敏记录已随磁盘日志持久化');
+  const elevToggle = button('完全权限下仍拒绝系统提权');
+  expect(elevToggle.disabled).toBe(false);
+  await act(async () => { elevToggle.click(); });
+  expect(call).toHaveBeenCalledWith('/runtime-guard', 'setGuardFullAccessElevation', { enabled: true }, expect.any(AbortSignal));
+  expect(elevToggle.getAttribute('aria-checked')).toBe('true');
+
+  await selectTab('监控设置');
+  const textToggle = button('防护停止拦截正文重复');
+  await act(async () => { textToggle.click(); });
+  expect(call).toHaveBeenCalledWith('/runtime-guard', 'setGuardStopText', { enabled: true }, expect.any(AbortSignal));
+  expect(textToggle.getAttribute('aria-checked')).toBe('true');
+
+  const Summary = slots.find(s => s.meta.name === 'plugins.row.config').component;
+  await act(async () => { root.render(React.createElement(Summary, { view: 'summary' })); });
+  const beforeIdle = snapshotCalls;
+  await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+  expect(snapshotCalls).toBe(beforeIdle);
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+  expect(snapshotCalls).toBe(beforeIdle + 1);
+});

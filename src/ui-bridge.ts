@@ -34,6 +34,8 @@ export function registerUI(ctx: HostContext, api: RuntimeGuardAPI, updates: Upda
     const routes: Record<string, (payload: Record<string, unknown>, keys: string[]) => unknown> = {
       setDiskLogging: boolRoute(enabled => api.setDiskLogging(enabled), ['SETTINGS_FAILED', 'Could not save disk logging']),
       setOperationSafety: boolRoute(enabled => api.setOperationSafety(enabled), ['SETTINGS_FAILED', 'Could not save operation safety']),
+      setGuardFullAccessElevation: boolRoute(enabled => api.setGuardFullAccessElevation(enabled), ['SETTINGS_FAILED', 'Could not save operation safety']),
+      setGuardStopText: boolRoute(enabled => api.setGuardStopText(enabled), ['SETTINGS_FAILED', 'Could not save guard text setting']),
       setAutomaticUpdates: boolRoute(enabled => updates.setAutomatic(enabled)),
       setMonitoring: boolRoute(enabled => { api.setMonitoring(enabled); return api.status(); }),
       setModelScope: payload => {

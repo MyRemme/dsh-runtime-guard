@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile, readFile, rm, rename } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -530,4 +530,21 @@ it('validates semver ranges, prereleases and PAX long archive paths without exte
   await writeFile(join(longDir, 'extra.txt'), 'ok');
   const paxArchive = join(dir, 'pax.tgz'); await create({ cwd: dir, file: paxArchive, gzip: true }, ['package']);
   await validateArchive(paxArchive, '0.1.8', '0.2.1-rc.2');
+});
+it('prunes stale cached archives while keeping referenced and current archives', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'flash-update-prune-')); roots.push(dir);
+  const updates = join(dir, '.runtime-guard/updates');
+  await mkdir(updates, { recursive: true });
+  await writeFile(join(dir, 'package.json'), JSON.stringify({
+    dependencies: { 'dsh-runtime-guard': `file:${join(updates, 'dsh-runtime-guard-0.2.5-keepme.tgz').replaceAll('\\', '/')}` },
+  }));
+  await writeFile(join(updates, 'dsh-runtime-guard-0.2.0.tgz'), 'old');
+  await writeFile(join(updates, 'dsh-runtime-guard-0.2.5-keepme.tgz'), 'pinned');
+  await writeFile(join(updates, 'dsh-runtime-guard-0.2.8-beta-curr.tgz'), 'current');
+  const updater = new Updater({ directory: dir, hostVersion: '0.2.1-rc.2', currentVersion: '0.2.8-beta', schedule: false,
+    manager: { installBundle: vi.fn() }, idle: () => true });
+  updaters.push(updater);
+  await updater.start();
+  await updater.pruneOldArchives();
+  expect((await readdir(updates)).sort()).toEqual(['dsh-runtime-guard-0.2.5-keepme.tgz', 'dsh-runtime-guard-0.2.8-beta-curr.tgz']);
 });

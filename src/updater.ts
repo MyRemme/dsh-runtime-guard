@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, mkdir, writeFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, readdir, mkdir, writeFile, stat, unlink } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -175,6 +175,7 @@ export class Updater implements UpdateAPI {
         await this.save();
       }
     } catch { /* First installation or invalid state starts with automatic updates off. */ }
+    if (!this.disposed) void this.pruneOldArchives().catch(() => {});
     if (this.disposed || this.options.schedule === false) return;
     this.timer = setInterval(() => {
       if (this.pending && this.options.idle()) this.startInstall(this.pending);
@@ -185,6 +186,43 @@ export class Updater implements UpdateAPI {
     this.timer.unref();
   }
   status(): UpdateStatus { return { ...this.state }; }
+  /** Remove stale downloaded archives while keeping anything referenced by the profile or active state. */
+  async pruneOldArchives(keepFile?: string): Promise<void> {
+    const keep = new Set<string>();
+    if (keepFile) keep.add(basename(keepFile));
+    if (this.prepared?.file) keep.add(basename(this.prepared.file));
+    try {
+      const pkg = JSON.parse(await readFile(join(this.options.directory, 'package.json'), 'utf8')) as { dependencies?: Record<string, unknown> };
+      const spec = pkg.dependencies?.[manifest.name];
+      if (typeof spec === 'string') {
+        const match = /(?:^|[/\\])\.runtime-guard[/\\]updates[/\\]([^/\\]+\.tgz)$/i.exec(spec);
+        if (match?.[1]) keep.add(match[1]);
+      }
+    } catch { /* Profile package.json may not exist in isolated runs. */ }
+    let entries: string[];
+    try { entries = await readdir(this.directory); } catch { return; }
+    const archives = entries.filter(name => /^dsh-runtime-guard-.+\.tgz$/i.test(name));
+    const versions = [this.state.currentVersion];
+    if (this.state.phase === 'restart-required' && this.state.latestVersion) versions.push(this.state.latestVersion);
+    for (const ver of versions) {
+      const prefix = `${manifest.name}-${ver}`;
+      const matched: { name: string; mtimeMs: number }[] = [];
+      for (const name of archives) {
+        if (name === `${prefix}.tgz` || name.startsWith(`${prefix}-`)) {
+          const info = await stat(join(this.directory, name)).catch(() => null);
+          if (info?.isFile()) matched.push({ name, mtimeMs: info.mtimeMs });
+        }
+      }
+      if (matched.length) {
+        matched.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+        keep.add(matched[0]!.name);
+      }
+    }
+    for (const name of archives) {
+      if (keep.has(name)) continue;
+      await unlink(join(this.directory, name)).catch(() => {});
+    }
+  }
   private save(next: UpdateStatus = this.state): Promise<void> {
     if (this.disposed) return Promise.resolve();
     const snapshot = JSON.stringify(next, null, 2) + '\n';
@@ -420,6 +458,7 @@ export class Updater implements UpdateAPI {
       this.prepared = null;
       await this.save(finished);
       Object.assign(this.state, finished);
+      void this.pruneOldArchives(file).catch(() => {});
     } catch (error) {
       if (this.disposed && !task.submitted) return;
       if (this.installing === task) this.installing = null;

@@ -308,7 +308,7 @@ window.__ModuleLoader__.load({
     function createController(ctx) {
       let state = { data: null, conversations: [], conversationError: '', sessions: Object.create(null), sessionErrors: Object.create(null), error: '', busy: false, test: '', toast: null, updatedAt: null, updates: null, updateError: '', updateBusy: false, modelScope: null, scopeError: '', scopeReadError: '', scopeLoading: false, logging: null, loggingError: '', loggingReadError: '' };
       const listeners = new Set(), requests = new Set(), downloads = new Map(), watched = new Map();
-      let disposed = false, generation = 0, updateGeneration = 0, lastNotice = '', activeTab = '', panelMounted = false;
+      let disposed = false, generation = 0, updateGeneration = 0, lastNotice = '', activeTab = '', panelMounted = false, idleTicks = 0;
       const publish = patch => { if (!disposed) { state = { ...state, ...patch }; for (const fn of listeners) fn(); } };
 
       async function call(endpoint, payload = {}) {
@@ -316,7 +316,7 @@ window.__ModuleLoader__.load({
         const timer = setTimeout(() => controller.abort(), 8000);
         try {
           const result = await ctx.connection.rpc.call('/runtime-guard', endpoint, payload, controller.signal);
-          if (!result?.ok) throw new Error('Host operation unavailable');
+          if (!result?.ok) throw Object.assign(new Error(result?.error?.message || 'Host operation unavailable'), { code: result?.error?.code || '' });
           return result.value;
         } finally { clearTimeout(timer); requests.delete(controller); }
       }
@@ -430,6 +430,7 @@ window.__ModuleLoader__.load({
         const prevTab = activeTab;
         panelMounted = mounted;
         activeTab = mounted ? tab : '';
+        idleTicks = 0;
         if (!mounted || prevTab === tab) return;
         syncActiveTab();
         if (tab === 'updates') void refreshUpdates();
@@ -437,12 +438,13 @@ window.__ModuleLoader__.load({
 
       async function action(endpoint, payload) {
         if (state.busy || disposed) return;
+        idleTicks = 0;
         generation++; publish({ busy: true, error: '' });
         try {
           const value = await call(endpoint, payload);
           if (disposed) return;
-          if (endpoint === 'setMonitoring' || endpoint === 'setMode') accept(value);
-          if (endpoint === 'setOperationSafety') publish({ data: state.data ? { ...state.data, operationSafety: value } : null, safetyError: '' });
+          if (endpoint === 'setMonitoring' || endpoint === 'setMode' || endpoint === 'setGuardStopText') accept(value);
+          if (endpoint === 'setOperationSafety' || endpoint === 'setGuardFullAccessElevation') publish({ data: state.data ? { ...state.data, operationSafety: value } : null, safetyError: '' });
           if (endpoint === 'setSessionEnabled' && payload?.sessionId && watched.has(payload.sessionId)) {
             publish({ sessions: { ...state.sessions, [payload.sessionId]: value }, sessionErrors: { ...state.sessionErrors, [payload.sessionId]: '' } });
           }
@@ -455,7 +457,7 @@ window.__ModuleLoader__.load({
             downloads.set(url, setTimeout(() => { URL.revokeObjectURL(url); downloads.delete(url); }, 60000));
             const a = document.createElement('a'); a.href = url; a.download = 'runtime-guard-diagnostics.json'; document.body.appendChild(a); a.click(); a.remove();
           }
-        } catch { publish(endpoint === 'setDiskLogging' ? { loggingError: '日志设置保存失败，原设置仍然生效。请重试。' } : endpoint === 'setOperationSafety' ? { safetyError: '操作防护设置保存失败，原设置仍然生效。请重试。' } : endpoint === 'setModelScope' ? { scopeError: '范围保存失败，原设置仍然生效。请重试。' } : { error: '操作未完成，请重试。' }); }
+        } catch { publish(endpoint === 'setDiskLogging' ? { loggingError: '日志设置保存失败，原设置仍然生效。请重试。' } : endpoint === 'setOperationSafety' || endpoint === 'setGuardFullAccessElevation' ? { safetyError: '操作防护设置保存失败，原设置仍然生效。请重试。' } : endpoint === 'setModelScope' ? { scopeError: '范围保存失败，原设置仍然生效。请重试。' } : { error: '操作未完成，请重试。' }); }
         finally {
           generation++; publish({ busy: false });
           void refresh();
@@ -464,12 +466,18 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const onVisibility = () => { if (document.visibilityState !== 'hidden' && !disposed) void poll(); };
+      const onVisibility = () => { if (document.visibilityState !== 'hidden' && !disposed) { idleTicks = 0; void poll(); } };
       document.addEventListener?.('visibilitychange', onVisibility);
-      const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void poll(); }, 2000); void refresh();
+      const timer = setInterval(() => {
+        if (document.visibilityState === 'hidden') return;
+        const active = panelMounted || watched.size > 0 || (state.data?.activeRequests ?? 0) > 0;
+        if (!active && ++idleTicks < 5) return;
+        idleTicks = 0;
+        void poll();
+      }, 2000); void refresh();
       return {
         subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); }, snapshot: () => state, refresh: poll, setPanelView, refreshModels: () => refreshScope('', true), action, updateAction,
-        watch: id => { watched.set(id, (watched.get(id) || 0) + 1); void refreshSession(id, id); return () => { const count = watched.get(id) - 1; if (count) watched.set(id, count); else { watched.delete(id); const { [id]: _old, ...sessions } = state.sessions; const { [id]: _error, ...sessionErrors } = state.sessionErrors; publish({ sessions, sessionErrors }); } }; },
+        watch: id => { idleTicks = 0; watched.set(id, (watched.get(id) || 0) + 1); void refreshSession(id, id); return () => { const count = watched.get(id) - 1; if (count) watched.set(id, count); else { watched.delete(id); const { [id]: _old, ...sessions } = state.sessions; const { [id]: _error, ...sessionErrors } = state.sessionErrors; publish({ sessions, sessionErrors }); } }; },
         dismiss: () => publish({ toast: null }),
         dispose: () => { disposed = true; clearInterval(timer); document.removeEventListener?.('visibilitychange', onVisibility); for (const request of requests) request.abort(); for (const [url, timer] of downloads) { clearTimeout(timer); URL.revokeObjectURL(url); } downloads.clear(); watched.clear(); listeners.clear(); },
       };
@@ -577,7 +585,9 @@ window.__ModuleLoader__.load({
                   : data.compatibility.reason === 'host-version-mismatch'
                     ? `当前宿主版本与配置（${data.compatibility.version || '未知'}）不一致，已回退到观察模式，「防护停止」不可用。`
                     : `当前宿主版本（${data.compatibility.version || '未知'}）尚未通过防护停止验证，「防护停止」暂不可用。`),
-              h('dl', { className: 'rg26-facts' }, fact('检测后动作', data.mode === 'guard' ? '确认推理重复后请求停止本轮' : data.mode === 'assist' ? '回合结束后可提交纠正' : '显示告警，不中断输出'), fact('最近监控', time(data.lastMonitoredAt)))), h(ModelScope, { state })),
+              h('div', { className: 'rg26-setting-row' }, h('div', { className: 'rg26-setting-copy' }, h('strong', null, '防护停止拦截正文重复'), h('small', null, '开启后，防护停止模式在确认正文持续重复时也会请求停止本轮')),
+                h(UI.Switch, { label: '防护停止拦截正文重复', checked: Boolean(data.guardStopText), disabled: !online || state.busy, onChange: enabled => controller.action('setGuardStopText', { enabled }) })),
+              h('dl', { className: 'rg26-facts' }, fact('检测后动作', data.mode === 'guard' ? (data.guardStopText ? '确认推理或正文重复后请求停止本轮' : '确认推理重复后请求停止本轮') : data.mode === 'assist' ? '回合结束后可提交纠正' : '显示告警，不中断输出'), fact('最近监控', time(data.lastMonitoredAt)))), h(ModelScope, { state })),
           tab === 'updates' && h('div', { className: 'rg26-settings' }, h(Updates, { state }))),
           h('footer', { className: 'rg26-footer rg26-muted' }, status(label, online && data.monitoring ? 'on' : 'off'), h('time', { dateTime: state.updatedAt || undefined }, `最近同步 ${time(state.updatedAt)}`)))));
       }
@@ -614,6 +624,10 @@ window.__ModuleLoader__.load({
             label: '启用操作防护', checked: Boolean(value?.enabled), disabled: !value || Boolean(state.error) || state.busy,
             onChange: enabled => controller.action('setOperationSafety', { enabled }),
           })),
+          h('div', { className: 'rg26-setting-row' }, h('div', { className: 'rg26-setting-copy' }, h('strong', null, '完全权限下仍拒绝系统提权'), h('small', null, '即使对话处于完全权限，仍拦截 RunAs、计划任务与系统服务提权')), h(UI.Switch, {
+            label: '完全权限下仍拒绝系统提权', checked: Boolean(value?.guardFullAccessElevation), disabled: !value || !value.enabled || Boolean(state.error) || state.busy,
+            onChange: enabled => controller.action('setGuardFullAccessElevation', { enabled }),
+          })),
           h('p', { className: 'rg26-note' }, '按每个对话在输入框选择的权限模式检查，独立覆盖所有模型。暂停防空转监控或更改模型范围不影响操作防护。'),
           h('details', { className: 'rg26-policy' }, h('summary', null, '查看权限规则'), h('dl', { className: 'rg26-facts rg26-rules', 'aria-label': '三种权限模式的放行与拦截规则' },
             fact('仅查看', '放行读取；拒绝明确的写入、编辑、删除；无法确认用途的执行请求单次审批。'),
@@ -630,7 +644,7 @@ window.__ModuleLoader__.load({
             value.events.length ? h('ol', { className: 'rg26-events rg26-section-scroll', 'aria-label': '操作防护记录', tabIndex: 0 }, ...value.events.slice(0, 20).map((event, index) => h('li', { key: `${event.time}-${index}`, className: 'rg26-event' },
               h('strong', null, `${actions[event.action] || event.action} · ${event.tool}`),
               h('p', null, rules[event.rule] || event.rule), h('small', { className: 'rg26-muted' }, `${time(event.time)} · ${event.session} · ${event.mode}`)))) : h('p', { className: 'rg26-empty' }, '尚无操作防护记录。')),
-            h('p', { className: 'rg26-note' }, '完整命令和参数在 DSH 原生审批中展示。此处及诊断导出仅保留原因与结果，不保存命令正文。'),
+            h('p', { className: 'rg26-note' }, value.loggingPersisted ? '完整命令和参数在 DSH 原生审批中展示。此处及诊断导出仅保留原因与结果，不保存命令正文；计数与脱敏记录已随磁盘日志持久化，重启后自动恢复。' : '完整命令和参数在 DSH 原生审批中展示。此处及诊断导出仅保留原因与结果，不保存命令正文。'),
             h('details', null, h('summary', null, '环境与覆盖工具'), h('div', { className: 'rg26-detail-body' }, h('dl', { className: 'rg26-facts' }, fact('宿主版本', value.hostVersion), fact('设置保存', value.persistent ? '重启后保留' : '仅本次运行')), h('p', { className: 'rg26-note' }, `覆盖工具：${value.coveredTools.join('、')}。权限服务或执行前接口异常时会显示原因并阻止受保护调用。操作防护不能代替系统沙盒。`)))));
       }
       function ModelScope({ state }) {

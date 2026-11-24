@@ -49,6 +49,12 @@ it('restricts operation safety settings to the owner and validates payloads', as
   expect((await call('setOperationSafety', { enabled: true })).value.enabled).toBe(true);
   expect(api.operationSafety().enabled).toBe(true);
   expect(call('operationSafety').value.enabled).toBe(true);
+  expect(call('setGuardFullAccessElevation', { enabled: true }, 'guest').error?.code).toBe('FORBIDDEN');
+  expect(call('setGuardFullAccessElevation', { enabled: 'yes' }).error?.code).toBe('BAD_REQUEST');
+  expect((await call('setGuardFullAccessElevation', { enabled: true })).value.guardFullAccessElevation).toBe(true);
+  expect(call('setGuardStopText', { enabled: true }, 'guest').error?.code).toBe('FORBIDDEN');
+  expect(call('setGuardStopText', { enabled: 'yes' }).error?.code).toBe('BAD_REQUEST');
+  expect((await call('setGuardStopText', { enabled: true })).value.guardStopText).toBe(true);
   expect((await call('setOperationSafety', { enabled: false })).value.enabled).toBe(false);
 });
 it('restricts disk logging settings and directory details to the owner', async () => {
