@@ -736,7 +736,7 @@ export class OperationSafety {
       if (!extracted.ok || extracted.paths.length === 0) return { kind: 'deny', rule: 'invalid-arguments' };
       const subcommand = args.command.trim();
       const outside = extracted.paths.some(p => !isPathUnderSync(p, policy.workspaceRoot));
-      if (subcommand === 'view') return { kind: 'allow' };
+      if (subcommand === 'view') return extracted.paths.some(p => SENSITIVE_FILE_RE.test(p)) ? { kind: 'ask', rule: policy.mode === 'read-only' ? 'read-only-unknown' : 'opaque-execution' } : { kind: 'allow' };
       if (policy.mode === 'read-only') return { kind: 'deny', rule: 'read-only-write' };
       if (outside) return { kind: 'ask', rule: 'outside-workspace' };
       if (!['create', 'str_replace', 'insert'].includes(subcommand)) return { kind: 'ask', rule: 'opaque-execution' };

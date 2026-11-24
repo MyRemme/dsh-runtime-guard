@@ -47,9 +47,13 @@ window.__ModuleLoader__.load({
       .rg26-tab[aria-selected=true]{color:var(--rg26-accent);background:color-mix(in srgb,var(--rg26-accent) 12%,transparent);font-weight:600}
       .rg26-tabpanel{flex:1;min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;animation:rg26-page-in 220ms cubic-bezier(.16,1,.3,1)}
       .rg26-tabpanel[data-view=monitor]{overflow:hidden;display:flex;flex-direction:column;gap:22px;width:100%;scrollbar-gutter:auto}
-      .rg26-overview{display:flex;align-items:center;gap:30px;padding:20px 0 24px;border-bottom:1px solid var(--rg26-line);flex:none}
+      .rg26-overview{display:flex;align-items:center;gap:30px;padding:18px 22px;border:1px solid var(--rg26-line);border-radius:10px;background:linear-gradient(135deg,color-mix(in srgb,var(--rg26-accent) 6%,var(--rg26-soft)),var(--rg26-soft));flex:none}
       .rg26-overview-copy{display:flex;gap:14px;align-items:center;flex:1;min-width:0}
-      .rg26-emblem{display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:8px;background:color-mix(in srgb,var(--rg26-accent) 11%,transparent);color:var(--rg26-accent);flex:none}
+      .rg26-emblem{position:relative;display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:10px;background:color-mix(in srgb,var(--rg26-accent) 13%,transparent);color:var(--rg26-accent);flex:none}
+      .rg26-emblem[data-active=true]:after{content:'';position:absolute;inset:-3px;border-radius:12px;border:1.5px solid color-mix(in srgb,var(--rg26-accent) 45%,transparent);animation:rg26-pulse 2.2s ease-out infinite;pointer-events:none}
+      .rg26-tab-dot{width:6px;height:6px;border-radius:50%;background:var(--rg26-accent);flex:none}
+      .rg26-tab-dot[data-tone=warn]{background:var(--dsw-alias-state-warn-primary,#e5b66e)}
+      .rg26-tab-dot[data-tone=ok]{background:var(--dsw-alias-state-success-primary,#4caf50)}
       .rg26-overview h3{font-size:21px;line-height:30px;margin:0 0 5px;font-weight:600}
       .rg26-overview p{font-size:12px;line-height:20px;color:var(--rg26-secondary)}
       .rg26-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0}
@@ -78,7 +82,7 @@ window.__ModuleLoader__.load({
       .rg26-search input{width:100%;height:38px;padding:5px 10px 5px 32px;border:1px solid var(--rg26-line);border-radius:6px;background:var(--rg26-soft);color:inherit;font:inherit;font-size:13px}
       .rg26-search input:focus-visible{outline:0;border-bottom:2px solid var(--rg26-accent)}
       .rg26-search-icon{position:absolute;left:10px;top:12px;display:flex;color:var(--dsw-alias-label-tertiary)}
-      .rg26-filter{margin-bottom:8px;display:flex;align-items:center;gap:8px;min-width:0}
+      .rg26-filter{margin-bottom:10px;padding:5px 10px;border-radius:6px;border:1px solid color-mix(in srgb,var(--rg26-accent) 28%,var(--rg26-line));background:color-mix(in srgb,var(--rg26-accent) 7%,transparent);display:flex;align-items:center;gap:8px;min-width:0}
       .rg26-filter>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
       .rg26-conversations{display:flex;flex-direction:column;gap:10px;padding:0 4px 4px 0}
       .rg26-conversation{border:1px solid var(--rg26-line);border-radius:8px;padding:16px;background:var(--rg26-soft);min-width:0;flex:none;transition:background 140ms,border-color 140ms}
@@ -99,7 +103,17 @@ window.__ModuleLoader__.load({
       .rg26-events{list-style:none;padding:0;margin:0}
       .rg26-event{padding:14px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}
       .rg26-root .rg26-event{padding:16px 8px 18px 20px;position:relative;border-bottom:1px solid var(--rg26-line)}
-      .rg26-root .rg26-event:before{content:'';position:absolute;left:2px;top:24px;width:5px;height:5px;background:var(--rg26-accent);border-radius:50%}
+      .rg26-root .rg26-event:before{content:'';position:absolute;left:2px;top:24px;width:6px;height:6px;background:var(--rg26-accent);border-radius:50%}
+      .rg26-root .rg26-event[data-tone=warn]:before{background:var(--dsw-alias-state-warn-primary,#e5b66e)}
+      .rg26-root .rg26-event[data-tone=danger]:before{background:var(--dsw-alias-state-error-primary,#e5534b)}
+      .rg26-root .rg26-event[data-tone=ok]:before{background:var(--dsw-alias-state-success-primary,#4caf50)}
+      .rg26-safety-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+      .rg26-safety-title{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;line-height:20px}
+      .rg26-badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:999px;font-size:11px;line-height:18px;font-weight:600;background:color-mix(in srgb,var(--rg26-accent) 12%,transparent);color:var(--rg26-accent)}
+      .rg26-badge[data-tone=danger]{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#e5534b) 14%,transparent);color:var(--dsw-alias-state-error-primary,#e5534b)}
+      .rg26-badge[data-tone=warn]{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#e5b66e) 16%,transparent);color:var(--dsw-alias-state-warn-primary,#c88a2b)}
+      .rg26-badge[data-tone=ok]{background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#4caf50) 14%,transparent);color:var(--dsw-alias-state-success-primary,#3d9949)}
+      .rg26-badge[data-tone=muted]{background:var(--rg26-fill);color:var(--dsw-alias-label-tertiary)}
       .rg26-event-head{justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0 12px}
       .rg26-event-title{font-weight:600;font-size:13px;line-height:22px}
       .rg26-event time{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:20px;flex:none}
@@ -225,10 +239,12 @@ window.__ModuleLoader__.load({
       .rg26-dialog .rg26-live{line-height:20px}
       .rg26-dialog :focus-visible{outline:2px solid var(--rg26-accent);outline-offset:3px}
       .rg26-root :focus-visible,.rg26-dock-button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}
-      .rg26-toast{position:fixed;right:20px;bottom:20px;z-index:1000;width:min(360px,calc(100vw - 40px));padding:14px 16px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg,8px);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-prominent,0 6px 24px #0002)}
+      .rg26-toast{position:fixed;right:20px;bottom:20px;z-index:1000;width:min(360px,calc(100vw - 40px));padding:14px 16px;border:.5px solid var(--dsw-alias-border-l3);border-left:3px solid var(--dsw-alias-state-warn-primary,#e5b66e);border-radius:var(--dsw-radius-lg,8px);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-prominent,0 8px 28px #0003);animation:rg26-toast-in 200ms cubic-bezier(.16,1,.3,1)}
       .rg26-toast p{margin:5px 0 10px;font-size:12px;color:var(--dsw-alias-label-secondary)}
       @keyframes rg26-page-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
       @keyframes rg26-detail-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
+      @keyframes rg26-toast-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+      @keyframes rg26-pulse{0%{opacity:.7;transform:scale(1)}100%{opacity:0;transform:scale(1.18)}}
       @container rg26-panel (max-width:1050px){.rg26-workspace{padding:20px 24px 12px;gap:16px}.rg26-header-tools .rg26-switch{margin-right:4px}.rg26-monitor{gap:20px}.rg26-monitor-section+.rg26-monitor-section{padding-left:20px}}
       @container rg26-panel (max-width:1000px){.rg26-overview{gap:20px}.rg26-root .rg26-overview .rg26-stats{gap:18px;max-width:360px}.rg26-overview h3{font-size:19px}.rg26-workspace{padding:22px 24px 12px}.rg26-tabpanel[data-view=settings] .rg26-settings{gap:24px}.rg26-tabpanel[data-view=settings] .rg26-settings>.rg26-section:first-child{padding-left:24px}.rg26-settings .rg26-mode-options{grid-template-columns:1fr}.rg26-settings .rg26-mode-options label{min-height:56px;gap:2px;padding:9px 12px}}
       @container rg26-panel (max-width:860px){.rg26-tabs{gap:20px}.rg26-workspace{padding:18px 24px 12px;gap:16px}.rg26-header-tools .rg26-switch{margin-right:8px}.rg26-monitor-modes{display:flex;gap:4px;flex:none;background:var(--rg26-fill);padding:3px;border-radius:6px}.rg26-monitor-modes button{flex:1;min-height:30px;padding:4px 10px;border:0;border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer}.rg26-monitor-modes button[aria-pressed=true]{background:var(--dsw-alias-bg-layer-1,#fff);color:var(--rg26-accent);box-shadow:0 1px 3px #0001}.rg26-monitor{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);gap:0}.rg26-monitor-section+.rg26-monitor-section{border-left:0;padding-left:0}.rg26-monitor[data-pane=conversations]>.rg26-monitor-section:last-child,.rg26-monitor[data-pane=events]>.rg26-monitor-section:first-child{display:none}.rg26-root .rg26-overview .rg26-stats{max-width:none;width:100%;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.rg26-overview{align-items:flex-start;flex-direction:column;gap:20px;padding:8px 0 20px}.rg26-overview h3{font-size:19px}.rg26-tabpanel[data-view=settings] .rg26-settings{display:flex;gap:28px}.rg26-tabpanel[data-view=settings] .rg26-settings>.rg26-section:first-child{border:0;padding:0;order:3}.rg26-settings .rg26-mode-options{grid-template-columns:repeat(3,minmax(0,1fr))}.rg26-settings .rg26-mode-options label{min-height:78px;padding:10px 8px}.rg26-settings>.rg26-section{width:100%}.rg26-monitor .rg26-scroll>.rg26-empty{min-height:160px}.rg26-tabpanel[data-view=monitor]{gap:16px}.rg26-root .rg26-stat dd{font-size:24px;line-height:30px}.rg26-root .rg26-fact{grid-template-columns:130px minmax(0,1fr);gap:16px}.rg26-root .rg26-rules .rg26-fact{grid-template-columns:112px minmax(0,1fr)}}
@@ -293,12 +309,12 @@ window.__ModuleLoader__.load({
       if (data.coverage === 'monitoring') return { label: !live ? '正在监控' : live.checks ? '持续检测 · 暂未发现循环' : live.reasoningChars + live.textChars ? '接收输出 · 积累检测样本' : '等待模型首个输出', tone: 'on' };
       return { label: live && !live.checks ? '请求结束 · 检测样本不足' : '最近请求 · 未发现重复', tone: live && !live.checks ? 'off' : 'on' };
     }
-    function explain(event, mode) {
+    function explain(event, mode, guardStopText = false) {
       if (event.kind === 'stream-repeat') return {
         title: event.uncertainty ? '重复特征待确认' : event.confirmed ? `确认${event.contentType === 'text' ? '正文' : event.contentType === 'reasoning' ? '推理' : '输出'}重复` : '疑似重复',
         reason: `检测到${event.method === 'phrase' ? '夹杂变化文字的短句反复出现' : '周期性短句轮转'}${event.period ? `，周期 ${event.period} 字符` : ''}${event.repeats ? `、重复 ${event.repeats} 次` : ''}${event.coverage === undefined ? '' : `，${event.method === 'phrase' ? '短句单元占比' : '窗口覆盖'} ${Math.round(event.coverage * 100)}%`}${event.novelty === undefined ? '' : `，新增四字符片段 ${Math.round(event.novelty * 100)}%`}。${event.confirmed ? '连续多次检查通过重复确认。' : '尚未达到连续确认条件。'}`,
         result: event.uncertainty ? `${event.uncertainty === 'changing-units' ? '重复短句间的对象或内容仍在变化' : '重复短句间仍有变化编号'}，可能是逐项检查，无法确认是否空转。已通知你，未自动停止或提交纠正，继续监测。`
-          : event.confirmed && mode === 'guard' && event.contentType === 'reasoning' ? '已确认推理重复；停止请求和宿主确认见后续处理记录。'
+          : event.confirmed && mode === 'guard' && (event.contentType === 'reasoning' || (guardStopText && event.contentType === 'text')) ? `已确认${event.contentType === 'text' ? '正文' : '推理'}重复；停止请求和宿主确认见后续处理记录。`
           : event.confirmed && mode === 'assist' ? '仅确认重复；纠正是否排队或提交见后续处理记录。本次输出未中断。' : '仅告警，未拦截、未中断输出。',
       };
       if (event.kind === 'tool-repeat') return { title: '工具重复告警', reason: `相同工具、参数及结果${event.repeats ? `连续出现 ${event.repeats} 次` : '重复出现'}，可能没有新增进展。`, result: '仅提醒，未阻止、跳过或重放任何工具。' };
@@ -306,7 +322,7 @@ window.__ModuleLoader__.load({
       return { title: event.kind === 'internal-error' ? '监控异常' : '监控已启动', reason: '', result: event.kind === 'internal-error' ? '当前检测可能不完整，模型输出继续传递。' : '观察模式已就绪。' };
     }
     function createController(ctx) {
-      let state = { data: null, conversations: [], conversationError: '', sessions: Object.create(null), sessionErrors: Object.create(null), error: '', busy: false, test: '', toast: null, updatedAt: null, updates: null, updateError: '', updateBusy: false, modelScope: null, scopeError: '', scopeReadError: '', scopeLoading: false, logging: null, loggingError: '', loggingReadError: '' };
+      let state = { data: null, conversations: [], conversationError: '', sessions: Object.create(null), sessionErrors: Object.create(null), error: '', safetyError: '', busy: false, test: '', toast: null, updatedAt: null, updates: null, updateError: '', updateBusy: false, modelScope: null, scopeError: '', scopeReadError: '', scopeLoading: false, logging: null, loggingError: '', loggingReadError: '' };
       const listeners = new Set(), requests = new Set(), downloads = new Map(), watched = new Map();
       let disposed = false, generation = 0, updateGeneration = 0, lastNotice = '', activeTab = '', panelMounted = false, idleTicks = 0;
       const publish = patch => { if (!disposed) { state = { ...state, ...patch }; for (const fn of listeners) fn(); } };
@@ -507,10 +523,13 @@ window.__ModuleLoader__.load({
           live && h('div', { className: 'rg26-live' }, h('span', null, `最近输出 ${time(live.lastOutputAt)}`),
             h('span', null, `最近检测 ${time(live.lastCheckAt)}`), live.active && h('span', null, `等待新输出 ${Math.floor(live.silentForMs / 1000)} 秒`)));
       }
-      function Events({ events, mode, conversations = [] }) {
+      function Events({ events, mode, guardStopText = false, conversations = [] }) {
+        const eventTone = event => event.kind === 'internal-error' ? 'danger'
+          : (event.kind === 'tool-repeat' || (event.kind === 'stream-repeat' && (event.confirmed || event.uncertainty))) ? 'warn'
+          : (event.kind === 'recovery' && ['stop-confirmed', 'recovery-submitted'].includes(event.action)) ? 'ok' : undefined;
         return h('ol', { className: 'rg26-events' }, events.map((event, i) => {
-          const text = explain(event, mode);
-          return h('li', { className: 'rg26-event', key: `${event.session}/${event.time}/${i}` },
+          const text = explain(event, mode, guardStopText);
+          return h('li', { className: 'rg26-event', 'data-tone': eventTone(event), key: `${event.session}/${event.time}/${i}` },
             h('div', { className: 'rg26-event-head' }, h('span', { className: 'rg26-event-title' }, text.title), h('time', null, time(event.time))),
             h('div', { className: 'rg26-event-context' }, event.session && (() => { const item = conversations.find(item => item.sessionKey === event.session); return h('button', { type: 'button', className: 'rg26-link', disabled: !item?.sessionId || !service('uiWorkspace')?.openSession, onClick: () => openConversation(item) }, item ? conversationName(item) : `对话 ${event.session.slice(0, 8)}`); })(),
               event.turn !== undefined && h('span', { className: 'rg26-tag' }, `第 ${event.turn} 轮${event.step === undefined ? '' : ` · 步骤 ${event.step}`}`)),
@@ -543,12 +562,16 @@ window.__ModuleLoader__.load({
           h('main', { className: 'rg26-workspace', 'data-view': tab }, h('header', { className: 'rg26-head' }, h('div', { className: 'rg26-title' }, icon(UI.IconShieldOutlineRegular, 20), h('h2', null, '运行时护栏')),
             h('div', { className: 'rg26-tools rg26-header-tools' }, h('span', { className: 'rg26-switch' }, '启用监控', h(UI.Switch, { label: '启用监控', checked: Boolean(data?.monitoring), disabled: !online || state.busy, onChange: enabled => controller.action('setMonitoring', { enabled }) })),
               command('刷新状态', controller.refresh, UI.IconRefreshOutlineRegular, state.busy, true), command('离线自检', () => controller.action('selfTest'), UI.IconInfoOutlineRegular, !online || state.busy, true), command('导出诊断日志', () => controller.action('export'), UI.IconDownloadOutlineRegular, !online || state.busy, true))),
-          h('nav', { className: 'rg26-tabs', role: 'tablist', 'aria-label': '护栏页面', 'aria-orientation': 'horizontal', onKeyDown: onTabKey }, ...tabs.map(([key, text, Icon]) => h('button', { key, id: `${id}-${key}`, type: 'button', role: 'tab', className: 'rg26-tab', 'aria-selected': tab === key, 'aria-controls': `${id}-content`, tabIndex: tab === key ? 0 : -1, onClick: () => setTab(key) }, icon(Icon, 16), h('span', null, text)))),
+          h('nav', { className: 'rg26-tabs', role: 'tablist', 'aria-label': '护栏页面', 'aria-orientation': 'horizontal', onKeyDown: onTabKey }, ...tabs.map(([key, text, Icon]) => {
+            const dotTone = key === 'safety' ? (data?.operationSafety?.state === 'blocked' ? 'warn' : data?.operationSafety?.state === 'active' ? 'ok' : null)
+              : key === 'updates' ? (['available', 'restart-required'].includes(state.updates?.phase) ? 'warn' : null) : null;
+            return h('button', { key, id: `${id}-${key}`, type: 'button', role: 'tab', className: 'rg26-tab', 'aria-selected': tab === key, 'aria-controls': `${id}-content`, tabIndex: tab === key ? 0 : -1, onClick: () => setTab(key) }, icon(Icon, 16), h('span', null, text), dotTone && h('i', { className: 'rg26-tab-dot', 'data-tone': dotTone, 'aria-hidden': true }));
+          })),
           state.error && h('p', { role: 'alert', className: 'rg26-error' }, state.error), state.test && h('p', { role: 'status', className: 'rg26-test' }, state.test),
           h('div', { key: tab, id: `${id}-content`, role: 'tabpanel', 'aria-labelledby': `${id}-${tab}`, className: 'rg26-tabpanel', 'data-view': tab },
           tab === 'monitor' && (data ? h(React.Fragment, null,
             h('section', { className: 'rg26-overview', 'aria-label': '监控概览' },
-              h('div', { className: 'rg26-overview-copy' }, h('span', { className: 'rg26-emblem' }, icon(UI.IconShieldOutlineRegular, 25)), h('div', null,
+              h('div', { className: 'rg26-overview-copy' }, h('span', { className: 'rg26-emblem', 'data-active': String(Boolean(online && data.monitoring && data.activeRequests)) }, icon(UI.IconShieldOutlineRegular, 25)), h('div', null,
                 h('h3', null, !online ? '正在重新连接' : !data.monitoring ? '监控已暂停' : data.activeRequests ? '正在守护当前请求' : '护栏已就绪'),
                 h('p', null, !online ? '等待监控服务同步状态' : !data.monitoring ? '恢复监控后继续检查新请求' : `${state.conversations.length} 个对话 · ${data.activeRequests} 个进行中的请求 · ${modeName(data.mode)}`))),
               h('dl', { className: 'rg26-stats' }, stat('已监控请求', data.monitoredRequests), stat('确认重复', data.confirmed), stat('已提交纠正', data.recoverySubmitted))),
@@ -571,7 +594,7 @@ window.__ModuleLoader__.load({
               h('p', { className: 'rg26-health-note' }, '“暂未发现循环”仅描述已收到的输出。')),
             h('section', { className: 'rg26-section rg26-monitor-section', 'aria-label': '检测与处理' }, h('div', { className: 'rg26-section-head' }, h('h3', null, '检测与处理'), h('span', { className: 'rg26-muted' }, `${events.length} 条记录`)),
               filter && h('div', { className: 'rg26-filter' }, h('span', { className: 'rg26-muted' }, conversationName(state.conversations.find(item => item.sessionKey === filter) || { sessionKey: filter })), command('显示全部对话', () => setFilter(''), UI.IconCloseOutlineRegular, false, true)),
-              h('div', { className: 'rg26-scroll', role: 'region', 'aria-label': '检测记录', tabIndex: 0, ref: eventRegion }, events.length ? h(Events, { events, mode: data.mode, conversations: state.conversations }) : h('div', { className: 'rg26-empty' }, h('span', { className: 'rg26-empty-icon' }, icon(UI.IconShieldOutlineRegular, 32)), h('span', null, '尚无检测记录'), h('small', null, '检测到重复或发生处理动作后，记录会显示在这里。')))))) : h('div', { className: 'rg26-empty' }, state.error || '正在连接监控服务')),
+              h('div', { className: 'rg26-scroll', role: 'region', 'aria-label': '检测记录', tabIndex: 0, ref: eventRegion }, events.length ? h(Events, { events, mode: data.mode, guardStopText: Boolean(data.guardStopText), conversations: state.conversations }) : h('div', { className: 'rg26-empty' }, h('span', { className: 'rg26-empty-icon' }, icon(UI.IconShieldOutlineRegular, 32)), h('span', null, '尚无检测记录'), h('small', null, '检测到重复或发生处理动作后，记录会显示在这里。')))))) : h('div', { className: 'rg26-empty' }, state.error || '正在连接监控服务')),
           tab === 'safety' && h('div', { className: 'rg26-settings' }, h(OperationSafety, { state })),
           tab === 'settings' && h('div', { className: 'rg26-settings' }, h(DiskLogging, { state }), data &&
             h('section', { className: 'rg26-section' }, h('div', { className: 'rg26-section-head' }, h('h3', null, '重复检测')),
@@ -619,20 +642,20 @@ window.__ModuleLoader__.load({
         };
         const actions = { denied: '已阻止', 'approval-requested': '已申请审批', approved: '已获单次批准', rejected: '未获批准', cancelled: '已取消' };
         return h('section', { className: 'rg26-section', 'aria-label': '操作防护' },
-          h('div', { className: 'rg26-section-head' }, h('h3', null, '工具执行检查'), status(state.error ? '状态未同步' : labels[value?.state] || '等待同步', value?.state === 'active' && !state.error ? 'on' : 'off')),
+          h('div', { className: 'rg26-section-head' }, h('h3', null, '工具执行检查'), status(state.error ? '状态未同步' : labels[value?.state] || '等待同步', state.error ? 'off' : value?.state === 'active' ? 'on' : value?.state === 'blocked' ? 'warn' : 'off')),
           h('div', { className: 'rg26-setting-row' }, h('div', { className: 'rg26-setting-copy' }, h('strong', null, '启用操作防护'), h('small', null, '跟随当前对话的权限模式')), h(UI.Switch, {
             label: '启用操作防护', checked: Boolean(value?.enabled), disabled: !value || Boolean(state.error) || state.busy,
             onChange: enabled => controller.action('setOperationSafety', { enabled }),
           })),
-          h('div', { className: 'rg26-setting-row' }, h('div', { className: 'rg26-setting-copy' }, h('strong', null, '完全权限下仍拒绝系统提权'), h('small', null, '即使对话处于完全权限，仍拦截 RunAs、计划任务与系统服务提权')), h(UI.Switch, {
+          h('div', { className: 'rg26-setting-row' }, h('div', { className: 'rg26-setting-copy' }, h('strong', null, '完全权限下仍拒绝系统提权'), h('small', null, '即使对话处于完全权限，仍拦截 RunAs、计划任务、系统服务及 sudo / doas / pkexec 等跨平台提权')), h(UI.Switch, {
             label: '完全权限下仍拒绝系统提权', checked: Boolean(value?.guardFullAccessElevation), disabled: !value || !value.enabled || Boolean(state.error) || state.busy,
             onChange: enabled => controller.action('setGuardFullAccessElevation', { enabled }),
           })),
           h('p', { className: 'rg26-note' }, '按每个对话在输入框选择的权限模式检查，独立覆盖所有模型。暂停防空转监控或更改模型范围不影响操作防护。'),
           h('details', { className: 'rg26-policy' }, h('summary', null, '查看权限规则'), h('dl', { className: 'rg26-facts rg26-rules', 'aria-label': '三种权限模式的放行与拦截规则' },
-            fact('仅查看', '放行读取；拒绝明确的写入、编辑、删除；无法确认用途的执行请求单次审批。'),
-            fact('仅工作区修改', '放行工作区内普通编辑、Python / Node 脚本及构建测试；越界写入、删除和未知执行请求单次审批；拒绝系统提权。'),
-            fact('完全权限', '插件不额外拦截或审批工具调用，交由 DSH 原生工具与系统权限处理。')),
+            fact('仅查看', '放行常规读取；拒绝明确写入、编辑、删除及系统提权；敏感驱动器与 .env / .ssh 等凭据读取、未知执行请求单次审批。'),
+            fact('仅工作区修改', '放行工作区内普通编辑、常规脚本与构建测试；越界写入、删除、内联/远程包执行（npx / dlx / git -c / node -e / python -c）与未知执行请求单次审批；拒绝跨平台系统提权。'),
+            fact('完全权限', '默认插件不额外拦截或审批工具调用（开启上方提权开关后仍拦截已识别的系统提权），交由 DSH 原生工具与系统权限处理。')),
           h('p', { className: 'rg26-note' }, '受限模式下，交互终端当前目录和输入缓冲无法可靠确认，发送输入（包括空回车）需单次审批；中断控制键放行。普通脚本优先使用 pwsh / bash。')),
           state.safetyError && h('p', { className: 'rg26-error', role: 'alert' }, state.safetyError),
           value?.enabled && value.state === 'blocked' && h('p', { className: 'rg26-error', role: 'alert' },
@@ -641,9 +664,15 @@ window.__ModuleLoader__.load({
               : (rules[value.reason] || '防护暂不可用，受保护工具已阻止；可关闭操作防护恢复宿主原有行为。')),
           value && h(React.Fragment, null,
             h('div', { className: 'rg26-records' }, h('h3', null, '检查记录'), h('dl', { className: 'rg26-stats' }, stat('已检查', value.checked), stat('已阻止 / 未获批准', value.denied), stat('审批请求', value.approvalRequests), stat('单次批准', value.approved)),
-            value.events.length ? h('ol', { className: 'rg26-events rg26-section-scroll', 'aria-label': '操作防护记录', tabIndex: 0 }, ...value.events.slice(0, 20).map((event, index) => h('li', { key: `${event.time}-${index}`, className: 'rg26-event' },
-              h('strong', null, `${actions[event.action] || event.action} · ${event.tool}`),
-              h('p', null, rules[event.rule] || event.rule), h('small', { className: 'rg26-muted' }, `${time(event.time)} · ${event.session} · ${event.mode}`)))) : h('p', { className: 'rg26-empty' }, '尚无操作防护记录。')),
+            value.events.length ? h('ol', { className: 'rg26-events rg26-section-scroll', 'aria-label': '操作防护记录', tabIndex: 0 }, ...value.events.slice(0, 20).map((event, index) => {
+              const badgeTone = event.action === 'denied' ? 'danger' : event.action === 'rejected' ? 'warn' : event.action === 'approved' ? 'ok' : event.action === 'cancelled' ? 'muted' : 'info';
+              return h('li', { key: `${event.time}-${index}`, className: 'rg26-event', 'data-tone': badgeTone === 'danger' ? 'danger' : badgeTone === 'warn' ? 'warn' : badgeTone === 'ok' ? 'ok' : undefined },
+                h('div', { className: 'rg26-safety-head' },
+                  h('span', { className: 'rg26-safety-title' }, h('span', { className: 'rg26-badge', 'data-tone': badgeTone }, actions[event.action] || event.action), ` · ${event.tool}`),
+                  h('time', null, time(event.time))),
+                h('p', null, rules[event.rule] || event.rule),
+                h('small', { className: 'rg26-muted' }, `${event.session} · ${event.mode}`));
+            })) : h('p', { className: 'rg26-empty' }, '尚无操作防护记录。')),
             h('p', { className: 'rg26-note' }, value.loggingPersisted ? '完整命令和参数在 DSH 原生审批中展示。此处及诊断导出仅保留原因与结果，不保存命令正文；计数与脱敏记录已随磁盘日志持久化，重启后自动恢复。' : '完整命令和参数在 DSH 原生审批中展示。此处及诊断导出仅保留原因与结果，不保存命令正文。'),
             h('details', null, h('summary', null, '环境与覆盖工具'), h('div', { className: 'rg26-detail-body' }, h('dl', { className: 'rg26-facts' }, fact('宿主版本', value.hostVersion), fact('设置保存', value.persistent ? '重启后保留' : '仅本次运行')), h('p', { className: 'rg26-note' }, `覆盖工具：${value.coveredTools.join('、')}。权限服务或执行前接口异常时会显示原因并阻止受保护调用。操作防护不能代替系统沙盒。`)))));
       }
@@ -775,7 +804,7 @@ window.__ModuleLoader__.load({
       }
       function Toast() {
         const { toast, data } = useState(); if (!toast) return null;
-        const text = explain(toast, data?.mode);
+        const text = explain(toast, data?.mode, Boolean(data?.guardStopText));
         return h('aside', { className: 'rg26-toast', role: 'alert' }, h('strong', null, '护栏 · ' + text.title), h('p', null, text.result), h('div', { className: 'rg26-row' }, command('查看记录', () => { ctx.layout.selectPanel(PANEL); controller.dismiss(); }, UI.IconInfoOutlineRegular), command('关闭', controller.dismiss, UI.IconCloseOutlineRegular, false, true)));
       }
       ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL }, Panel));

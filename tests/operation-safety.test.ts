@@ -505,6 +505,9 @@ it('blocks Unix/macOS elevation, git -c config execution, package runners, and s
     expect(assessCommand(cmd, 'read-only', '/tmp/ws', '/tmp/ws').kind).toBe('ask');
     expect(assessCommand(cmd, 'workspace-write', '/tmp/ws', '/tmp/ws').kind).toBe('ask');
   }
+  f.setMode('read-only');
+  expect((await f.run(f.execution('', 'str_replace_editor', { command: 'view', path: 'D:\\project\\.env' }))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('read-only-unknown');
   expect(isPathUnderSync('D:\\outside\\a.txt', 'D:\\project')).toBe(false);
   expect(isPathUnderSync('D:\\project\\src\\a.ts', 'D:\\project')).toBe(true);
 });
