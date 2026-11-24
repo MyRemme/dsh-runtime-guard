@@ -461,3 +461,50 @@ it('supports compatible 0.2.x hosts, optional full-access elevation guard, legac
   expect(h2.api.operationSafety()).toMatchObject({ loggingPersisted: true, checked: 1, denied: 1 });
   expect(h2.api.operationSafety().events[0]?.rule).toBe('elevation');
 });
+
+it('blocks Unix/macOS elevation, git -c config execution, package runners, and sensitive file reads', async () => {
+  const f = fixture();
+  for (const cmd of [
+    'sudo id',
+    'doas sh',
+    'pkexec env',
+    'su - root',
+    'chmod +s ./tool',
+    'chmod 4755 ./tool',
+    'usermod -aG sudo alice',
+  ]) {
+    expect((await f.run(f.execution(cmd))).kind).toBe('deny');
+    expect(f.safety.status().events[0]?.rule).toBe('elevation');
+  }
+  // Full-access optional elevation guard also blocks Unix elevation routes.
+  f.setMode('danger-full-access');
+  await f.safety.setGuardFullAccessElevation(true);
+  expect((await f.run(f.execution('sudo id'))).kind).toBe('deny');
+  expect(f.safety.status().events[0]?.rule).toBe('elevation');
+
+  // git -c / --config-env, package runners (npx/dlx/exec), python -m (non-test), node --import data:
+  expect(assessCommand('git -c pager.status="sh -c id" status', 'read-only', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'ask', rule: 'read-only-unknown' });
+  expect(assessCommand('git -c core.sshCommand="sh" fetch', 'workspace-write', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'ask', rule: 'opaque-execution' });
+  expect(assessCommand('git --config-env=core.sshCommand=X status', 'workspace-write', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'ask', rule: 'opaque-execution' });
+  for (const cmd of [
+    'npx untrusted-cli',
+    'npm exec -- untrusted-cli',
+    'pnpm dlx untrusted-cli',
+    'yarn dlx untrusted-cli',
+    'bunx untrusted-cli',
+    'python3 -m http.server 8000',
+    'node --import=data:text/javascript,console.log(1) app.js',
+  ]) {
+    expect(assessCommand(cmd, 'workspace-write', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'ask', rule: 'opaque-execution' });
+  }
+  expect(assessCommand('python3 -m pytest -q', 'workspace-write', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'allow' });
+  expect(assessCommand('python3 -m unittest discover', 'workspace-write', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'allow' });
+
+  // Sensitive credential/key file reads require approval even in read-only or workspace-write.
+  for (const cmd of ['cat .env', 'cat .env.production', 'Get-Content .npmrc', 'cat /etc/passwd']) {
+    expect(assessCommand(cmd, 'read-only', '/tmp/ws', '/tmp/ws').kind).toBe('ask');
+    expect(assessCommand(cmd, 'workspace-write', '/tmp/ws', '/tmp/ws').kind).toBe('ask');
+  }
+  expect(isPathUnderSync('D:\\outside\\a.txt', 'D:\\project')).toBe(false);
+  expect(isPathUnderSync('D:\\project\\src\\a.ts', 'D:\\project')).toBe(true);
+});

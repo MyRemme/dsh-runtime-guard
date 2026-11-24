@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import { ProfileJsonStore } from './profile-file.js';
 import { sessionKey } from './metrics.js';
 import { satisfiesRange } from './semver.js';
@@ -67,6 +67,9 @@ const foldPath = (value: string): string => {
 /** Shared pattern for unresolved home/env/UNC/file-URI/drive-relative paths. */
 const SPECIAL_PATH_PREFIX_RE = /^(?:~(?:$|[/\\])|%[^%]+%|\\{2}|\/\/|file:|\$(?:env:|home\b|\{|[A-Za-z_][A-Za-z0-9_]*))/i;
 const SENSITIVE_PS_DRIVE_RE = /\b(?:env|cert|hkcu|hklm|registry|variable|function|alias):/i;
+const SENSITIVE_FILE_RE = /(?:^|[/\\"'=\s:])(?:\.env(?:\.[A-Za-z0-9_-]+)?|\.npmrc|\.netrc|\.pypirc|\.docker[/\\]config\.json|\.kube[/\\]config|\.ssh(?:[/\\]|$)|\.aws(?:[/\\]|$)|\.gnupg(?:[/\\]|$)|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|\/etc\/(?:shadow|passwd|sudoers)|ntds\.dit)(?=$|[/\\"'=\s;|&])/i;
+const GIT_CONFIG_EXEC_RE = /\bgit(?:\.exe)?\b[\s\S]*?(?:^|\s)(?:-c|--config-env)(?:=|\s|$)/i;
+const PACKAGE_EXEC_RE = /^(?:npx(?:\.cmd)?|pnpx(?:\.cmd)?|bunx|npm(?:\.cmd)?\s+exec|pnpm(?:\.cmd)?\s+(?:dlx|exec)|yarn(?:\.cmd)?\s+dlx)(?:\s|$)/i;
 const INLINE_DESTRUCTIVE_RE = /\b(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync|rmtree)\s*\(/;
 
 const READ_PS_CMDS = 'get-content|get-item|get-childitem|get-location|get-filehash|get-process|test-path|select-string|select-object|measure-object|compare-object|write-output|write-host|echo|pwd';
@@ -87,7 +90,11 @@ function hasElevationPattern(raw: string): boolean {
     || /\bschtasks(?:\.exe)?\b[\s\S]*?\/(?:create|change)\b/.test(text)
     || /\bsc(?:\.exe)?\s+(?:create|config)\b/.test(text)
     || /\bwmic(?:\.exe)?\s+process\s+call\s+create\b/.test(text)
-    || /\bnet(?:\.exe)?\s+localgroup\s+administrators\b/.test(text);
+    || /\bnet(?:\.exe)?\s+localgroup\s+administrators\b/.test(text)
+    || /(?:^|[\s;&|({"'])(?:sudo|doas|pkexec|visudo)(?=$|[\s;|&)}"'])/.test(text)
+    || /(?:^|[\s;&|({"'])su\s+(?:-\s|$|-[a-z]*[cls]|--login\b|--command\b|root\b)/.test(text)
+    || /\bchmod\b[^\r\n;|&]*?(?:\b[2467][0-7]{3}\b|[ugoa]*\+[rwxX]*s\b)/.test(text)
+    || /\b(?:usermod|gpasswd|adduser)\b[^\r\n;|&]*\b(?:sudo|wheel|admin)\b/.test(text);
 }
 
 function isInlineInterpreter(command: string): boolean {
@@ -106,15 +113,32 @@ function isInlineInterpreter(command: string): boolean {
     if (flag === '--') break;
     if (isPy) {
       if (/^-c[\s\S]*/i.test(flag)) return true;
+      if (/^-m$/i.test(flag) && i < rest.length) {
+        while (i < rest.length && /\s/.test(rest[i]!)) i++;
+        const modStart = i;
+        while (i < rest.length && !/\s/.test(rest[i]!)) i++;
+        const mod = rest.slice(modStart, i).toLowerCase();
+        if (!['pytest', 'unittest'].includes(mod)) return true;
+        break;
+      }
+      if (/^-m.+/i.test(flag)) {
+        const mod = flag.slice(2).toLowerCase();
+        if (!['pytest', 'unittest'].includes(mod)) return true;
+        break;
+      }
       if ((flag === '-W' || flag === '-X') && i < rest.length) {
         while (i < rest.length && /\s/.test(rest[i]!)) i++;
         while (i < rest.length && !/\s/.test(rest[i]!)) i++;
       }
     } else {
       if (/^-(?:e|-eval(?:=|$)|p|-print(?:=|$)|[ep]{2})/i.test(flag)) return true;
+      if (/^--(?:import|require)=(?:data:|https?:)/i.test(flag)) return true;
       if ((flag === '-r' || flag === '--require' || flag === '--import') && i < rest.length) {
         while (i < rest.length && /\s/.test(rest[i]!)) i++;
+        const valStart = i;
         while (i < rest.length && !/\s/.test(rest[i]!)) i++;
+        const val = rest.slice(valStart, i).replace(/^['"]|['"]$/g, '');
+        if (/^(?:data:|https?:)/i.test(val)) return true;
       }
     }
   }
@@ -170,6 +194,13 @@ export function isPathUnderSync(targetPath: string, workspaceRoot: string, baseD
   if (SPECIAL_PATH_PREFIX_RE.test(targetPath) || /^[A-Za-z]:(?![/\\])/.test(targetPath)) return false;
   const winContext = process.platform === 'win32' || /^[A-Za-z]:[/\\]/.test(workspaceRoot);
   if (winContext && (targetPath.startsWith('/') || targetPath.replace(/^[A-Za-z]:/, '').includes(':'))) return false;
+  if (winContext && process.platform !== 'win32') {
+    const winRoot = stripExtendedPrefix(win32.resolve(workspaceRoot)).toLowerCase();
+    const winBase = stripExtendedPrefix(win32.resolve(winRoot, baseDir)).toLowerCase();
+    const winTarget = stripExtendedPrefix(win32.resolve(winBase, targetPath)).toLowerCase();
+    const rel = win32.relative(winRoot, winTarget);
+    return rel === '' || (rel !== '..' && !rel.startsWith('..\\') && !rel.startsWith('../') && !win32.isAbsolute(rel));
+  }
   const resolvedBase = canonicalizeSync(resolve(workspaceRoot, baseDir));
   const canonRoot = foldPath(canonicalizeSync(workspaceRoot));
   const canonTarget = foldPath(canonicalizeSync(resolve(resolvedBase, targetPath)));
@@ -244,7 +275,8 @@ function resolveWorkdir(args: Record<string, unknown>, workspaceRoot: string): {
   if (!isValidTextArg(raw)) return { ok: false, rule: 'invalid-arguments' };
   const target = raw.trim();
   if (!isPathUnderSync(target, workspaceRoot)) return { ok: false, rule: 'outside-workspace' };
-  return { ok: true, workdir: resolve(workspaceRoot, target) };
+  const winContext = process.platform === 'win32' || /^[A-Za-z]:[/\\]/.test(workspaceRoot);
+  return { ok: true, workdir: winContext && process.platform !== 'win32' ? win32.resolve(workspaceRoot, target) : resolve(workspaceRoot, target) };
 }
 
 function extractPatchInfo(patch: string): { paths: string[]; destructive: boolean } {
@@ -426,6 +458,7 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
   const modifies = destructive || MODIFIES_CMD_RE.test(text)
     || /(?:^|[^<])>{1,2}|\bgit\s+(?:add|commit|checkout|switch|restore|merge|rebase|cherry-pick|revert|stash|pull|fetch|config)\b|\bgit\s+[\s\S]*--output(?:=|\s)/.test(text);
   const literalRead = !modifies && !/[`$;&<>(){}\r\n]/.test(command) && !SENSITIVE_PS_DRIVE_RE.test(command)
+    && !SENSITIVE_FILE_RE.test(command) && !GIT_CONFIG_EXEC_RE.test(command)
     && !/--(?:pre|ext-diff|textconv|output)\b/i.test(command)
     && splitUnquotedPipes(command).every(part => READ_PIPE_RE.test(part.trim()) || /^git\s+(?:status|diff|log|show|ls-files|ls-tree|rev-parse)(?:\s|$)/i.test(part.trim()));
   if (literalRead) return { kind: 'allow' };
@@ -436,7 +469,7 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
   if (mode === 'read-only') {
     if (modifies) return { kind: 'deny', rule: 'read-only-write' };
     if (outside) return { kind: 'ask', rule: 'outside-workspace' };
-    return STRICT_READ_RE.test(command.trim()) && !/[`$;&|<>{}\r\n]/.test(command) && !SENSITIVE_PS_DRIVE_RE.test(command)
+    return STRICT_READ_RE.test(command.trim()) && !/[`$;&|<>{}\r\n]/.test(command) && !SENSITIVE_PS_DRIVE_RE.test(command) && !SENSITIVE_FILE_RE.test(command)
       ? { kind: 'allow' } : { kind: 'ask', rule: 'read-only-unknown' };
   }
   if (destructive) return { kind: 'ask', rule: 'destructive' };
@@ -446,14 +479,15 @@ export function assessCommand(command: string, mode: Mode, workdir?: string, wor
   }
   // Mask literal strings that cannot invoke subshells while keeping double-quoted $() expansions visible.
   const unquoted = command.replace(/'[^']*'|"([^"]*)"/g, (whole, dbl: string | undefined) => (dbl?.includes('$') ? whole : ' '));
-  const development = /^(?:npm(?:\.cmd)?|pnpm(?:\.cmd)?|npx(?:\.cmd)?|yarn(?:\.cmd)?|bun|node(?:\.exe)?|python(?:3|\.exe)?|py|pytest|tsc|vitest|jest|go|cargo|dotnet|cmake|make|git)(?:\s|$)/i.test(command.trim());
-  if (development && !/[;&|`\r\n]/.test(command) && !/\$\(|[<>]\(/.test(command) && !hasExpandableDollar(command)
+  const development = /^(?:npm(?:\.cmd)?|pnpm(?:\.cmd)?|yarn(?:\.cmd)?|bun|node(?:\.exe)?|python(?:3|\.exe)?|py|pytest|tsc|vitest|jest|go|cargo|dotnet|cmake|make|git)(?:\s|$)/i.test(command.trim());
+  if (development && !PACKAGE_EXEC_RE.test(command.trim()) && !GIT_CONFIG_EXEC_RE.test(command) && !SENSITIVE_FILE_RE.test(command)
+    && !/[;&|`\r\n]/.test(command) && !/\$\(|[<>]\(/.test(command) && !hasExpandableDollar(command)
     && !DEV_NESTED_SHELL_RE.test(unquoted)
     && !/-(?:encodedcommand|enc|ec)\b|frombase64string|shell\.application/.test(unquoted)) return { kind: 'allow' };
   if (OPAQUE_CMD_RE.test(text)
     || /-(?:encodedcommand|enc|ec|e)\b|frombase64string|shell\.application|(?:^|[\s;])(?:&|\.)\s|\$\(|\.(?:ps1|bat|cmd|vbs|js|py)(?:\s|['"]|$)/.test(text)) return { kind: 'ask', rule: 'opaque-execution' };
   return ORDINARY_PS_RE.test(command.trim()) && !/[;&|`(){}\r\n]/.test(command) && !hasExpandableDollar(command)
-    && !SENSITIVE_PS_DRIVE_RE.test(command) && !/\.(?:ps1|bat|cmd|exe)\b/i.test(command)
+    && !SENSITIVE_PS_DRIVE_RE.test(command) && !SENSITIVE_FILE_RE.test(command) && !/\.(?:ps1|bat|cmd|exe)\b/i.test(command)
     ? { kind: 'allow' } : { kind: 'ask', rule: 'opaque-execution' };
 }
 

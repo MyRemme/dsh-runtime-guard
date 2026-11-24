@@ -13,8 +13,8 @@
 
 ## 验证内容
 
-- 受限模式中已识别的系统提权（`RunAs` / `ShellExecute` / `start -ver runas` / `wmic process call create` / `net localgroup administrators` / 计划任务 / 服务配置）在工具体之前被硬拒绝，不受前置 hook 绕过。
-- 仅查看模式放行常规读取，直接拒绝明确修改；`env:` / `hkcu:` / `hklm:` 等敏感驱动器读取、`node -e` / `python -c` / `bun -e` 内联执行以及存在提权或破坏性指令的工作区 `ops_bash` 脚本文件不会不经审批直接放行。
+- 受限模式中已识别的跨平台系统提权（Windows `RunAs` / `ShellExecute` / `start -ver runas` / `wmic process call create` / `net localgroup administrators` / 计划任务 / 服务配置，以及 Unix/macOS `sudo` / `doas` / `pkexec` / `visudo` / `su` / `chmod +s` / `usermod` 提权组）在工具体之前被硬拒绝，不受前置 hook 绕过。
+- 仅查看模式放行常规读取，直接拒绝明确修改；`env:` / `hkcu:` / `hklm:` 敏感驱动器与 `.env`/`.ssh`/`.npmrc`/`/etc/passwd` 等敏感凭据读取、`node -e`/`--import=data:` / `python -c`/`-m` / `bun -e`、`npx`/`npm exec`/`dlx`、`git -c` 配置执行以及存在提权或破坏性指令的工作区 `ops_bash` 脚本文件不会不经审批直接放行。
 - 仅工作区修改放行普通编辑与 Python/Node/npm 等项目开发命令，越界写入/执行目录（含目录联接逃逸）、危险删除和未知执行触发 DSH 原生单次审批。冒号绑定的 PowerShell 路径、缩进补丁头不能绕过检查。
 - 完全权限默认不添加插件拒绝或审批，仍调用宿主执行管线；开启「完全权限下仍拒绝系统提权」后，仍会在完全权限下继续拦截已识别的系统提权路径。每次调用读取宿主会话策略，不能通过工具参数改变用户模式。
 - 受限模式下发送交互终端输入（含空回车）需要新的单次审批，不把输入误判为工作区内的独立命令。
