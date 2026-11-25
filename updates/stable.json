@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "version": "0.2.7",
-  "name": "dsh-runtime-guard-0.2.7.tgz",
-  "size": 210742,
-  "sha256": "937f0595efe250da5402b0a7767f344d19a1a4851ae36d5bcc9c219b3e4e9b48",
-  "assetId": 759341320
+  "version": "0.2.8",
+  "name": "dsh-runtime-guard-0.2.8.tgz",
+  "size": 219236,
+  "sha256": "d6f7b38b8bf7268af4d3db27f48f26f39c6d1bdf8771c7212ed3cd6c6fd7b308",
+  "assetId": 790095839
 }
