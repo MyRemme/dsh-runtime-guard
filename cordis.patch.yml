@@ -1,6 +1,6 @@
 - insert:
     - id: runtime-guard
-      name: ./dist/runtime-0.2.8-beta.js
+      name: ./dist/runtime-0.2.8.js
       config:
         mode: observe
         modelScope: all
