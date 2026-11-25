@@ -63,7 +63,7 @@
     "test:compat": "vitest run tests/compatibility.test.ts",
     "test:host": "vitest run tests/host.test.ts",
     "test:safety-host": "npm run build && vitest run tests/safety-host.test.ts",
-    "test:package": "npm pack --ignore-scripts --pack-destination artifacts && node scripts/test-package.mjs",
+    "test:package": "node -e \"import('node:fs').then(fs=>fs.mkdirSync('artifacts',{recursive:true}))\" && npm pack --ignore-scripts --pack-destination artifacts && node scripts/test-package.mjs",
     "test:versions": "npm run build && node scripts/test-versions.mjs",
     "test:upgrades": "npm run build && node scripts/test-upgrades.mjs",
     "check": "npm run typecheck && npm test && npm run build",

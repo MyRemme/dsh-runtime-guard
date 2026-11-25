@@ -1,5 +1,5 @@
 {
-  "testedAt": "2026-11-18T06:22:01.819Z",
+  "testedAt": "2026-11-25T03:52:07.359Z",
   "type": "real-host-core-with-mock-provider",
   "results": [
     {
@@ -50,7 +50,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -101,7 +101,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -152,7 +152,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -203,7 +203,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -254,7 +254,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -305,7 +305,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -356,7 +356,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -407,7 +407,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -458,7 +458,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -509,7 +509,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -560,7 +560,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -611,7 +611,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -662,7 +662,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -713,7 +713,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -764,7 +764,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -815,7 +815,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -866,7 +866,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -917,7 +917,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -968,7 +968,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1019,7 +1019,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1070,7 +1070,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1121,7 +1121,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1172,7 +1172,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1223,7 +1223,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1274,7 +1274,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1325,7 +1325,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1381,7 +1381,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1432,7 +1432,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1483,7 +1483,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1534,7 +1534,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1585,7 +1585,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1641,7 +1641,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1692,7 +1692,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1743,7 +1743,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     },
     {
@@ -1794,7 +1794,7 @@
       ],
       "requests": 60,
       "provider": "deterministic-mock",
-      "node": "v24.20.0",
+      "node": "v22.18.0",
       "packaged": true
     }
   ]

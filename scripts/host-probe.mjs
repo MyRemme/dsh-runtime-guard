@@ -32,6 +32,7 @@ try {
   if (typeof ctx.tools.setExecutor === 'function') {
     const native = await load('@deepseek-ai/dsh-tool-executor-native'); await ctx.plugin(native);
   }
+  await ctx.plugin(owner => { owner.provide('profileContext', { installAnchor: resolve(runtimeRoot, 'package.json') }); });
   let response = 'normal', requests = 0, toolBodies = 0, correctionsSeen = 0, guardClosed = false, guardConsumed = 0;
   let reviewReady, reviewResume, queuedStep = 0, scenarioChars = 0;
   let recoveryStep = 0, sawRecoveredToolResult = false, waitingReady;

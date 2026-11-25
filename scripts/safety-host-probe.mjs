@@ -26,13 +26,17 @@ try {
     await ctx.plugin(service, service === prompt.default ? { personaPrefix: '', personaSuffix: '' } : service === loop.default ? { agents: [] } : {});
   }
   if (typeof ctx.tools.setExecutor === 'function') await ctx.plugin(await load('@deepseek-ai/dsh-tool-executor-native'));
-  if (sandbox) await ctx.plugin(sandbox.default, { mode: 'workspace-write', workspaceRoot: 'D:\\fixture' });
+  const fixtureRoot = process.platform === 'win32' ? 'D:\\fixture' : '/tmp/dsh-safety-fixture';
+  const outsideFile = process.platform === 'win32' ? 'D:\\outside\\never-created.txt' : '/tmp/dsh-safety-outside/never-created.txt';
+  const insideCreate = process.platform === 'win32' ? 'D:\\fixture\\never-created.txt' : '/tmp/dsh-safety-fixture/never-created.txt';
+  const insideDelete = process.platform === 'win32' ? 'D:\\fixture\\never-deleted.txt' : '/tmp/dsh-safety-fixture/never-deleted.txt';
+  if (sandbox) await ctx.plugin(sandbox.default, { mode: 'workspace-write', workspaceRoot: fixtureRoot });
   let mode = 'workspace-write', outcome = 'rejected', pendingCall, issued = false, bodies = 0;
   const requests = [];
   // The real policy-service contract is supplied without an OS executor. This
   // verifies policy consumption, approval/audit and dispatch, not Windows isolation.
   await ctx.plugin(owner => {
-    if (!sandbox) owner.provide('sandboxPolicy', { resolve: ({ session } = {}) => ({ mode, workspaceRoot: session?.header.cwd || 'D:\\fixture' }) });
+    if (!sandbox) owner.provide('sandboxPolicy', { resolve: ({ session } = {}) => ({ mode, workspaceRoot: session?.header.cwd || fixtureRoot }) });
     owner.provide('profileContext', { installAnchor: resolve(runtimeRoot, 'package.json') });
   });
   ctx.on('approval/request', async request => { requests.push(request); return outcome; });
@@ -90,20 +94,20 @@ try {
   await run('pwsh', { command: 'Start-Process cmd.exe -Verb RunAs' });
   assert.equal(bodies, 0); assert.equal(requests.length, 0); checks.push('elevation-blocked-before-body');
   setMode('read-only');
-  await run('write', { path: 'D:\\fixture\\never-created.txt', content: 'never written' });
-  await run('pwsh', { command: 'cmd /c del /f /a D:\\fixture\\never-deleted.txt' });
+  await run('write', { path: insideCreate, content: 'never written' });
+  await run('pwsh', { command: `cmd /c del /f /a ${insideDelete}` });
   assert.equal(bodies, 0); assert.equal(requests.length, 0); checks.push('readonly-mutations-denied-without-approval');
   await run('pwsh', { command: 'Get-Location' }); assert.equal(bodies, 1); checks.push('readonly-simple-read');
   setMode('workspace-write');
-  await run('write', { path: 'D:\\outside\\never-created.txt', content: 'never written' });
+  await run('write', { path: outsideFile, content: 'never written' });
   assert.equal(bodies, 1); assert.equal(requests.length, 1); checks.push('outside-workspace-routed-to-approval');
-  await run('pwsh', { command: 'Remove-Item D:\\fixture\\never-deleted.txt' });
+  await run('pwsh', { command: `Remove-Item ${insideDelete}` });
   assert.equal(bodies, 1); assert.equal(requests.length, 2); checks.push('approval-rejection-no-body');
   outcome = 'allowed-once';
-  await run('pwsh', { command: 'Remove-Item D:\\fixture\\never-deleted.txt' });
+  await run('pwsh', { command: `Remove-Item ${insideDelete}` });
   assert.equal(bodies, 2); assert.equal(requests.length, 3); checks.push('approval-grants-one-inert-body');
   outcome = 'rejected';
-  await run('pwsh', { command: 'Remove-Item D:\\fixture\\never-deleted.txt' });
+  await run('pwsh', { command: `Remove-Item ${insideDelete}` });
   assert.equal(bodies, 2); assert.equal(requests.length, 4); checks.push('next-invocation-requires-new-approval');
   assert.ok(requests.slice(1).every(request => request.callId && request.reason.includes('never-deleted.txt')));
   const events = current.session.snapshotEvents();
@@ -111,7 +115,7 @@ try {
   assert.equal(events.filter(event => event.type === 'approval/decided').length, 4); checks.push('real-approval-audit-pairs');
   bypassPre = true;
   await run('pwsh', { command: 'Start-Process cmd.exe -Verb RunAs' });
-  await run('pwsh', { command: 'Remove-Item D:\\fixture\\never-deleted.txt' });
+  await run('pwsh', { command: `Remove-Item ${insideDelete}` });
   assert.equal(bodies, 2); assert.equal(requests.length, 4); bypassPre = false; checks.push('hard-denial-survives-pre-hook-allow');
   await run('relay_fixture', { command: 'Start-Process cmd.exe -Verb RunAs' });
   assert.equal(bodies, 2); assert.ok(api.operationSafety().events.some(event => event.rule === 'elevation')); checks.push('nested-tool-dispatch-guarded');
@@ -127,7 +131,7 @@ try {
   assert.equal(bodies, 9); assert.equal(requests.length, 4); checks.push('full-access-delegates-without-plugin-approval');
   setMode('workspace-write');
   await api.setOperationSafety(false);
-  await run('pwsh', { command: 'Remove-Item D:\\fixture\\never-deleted.txt' }); assert.equal(bodies, 10);
+  await run('pwsh', { command: `Remove-Item ${insideDelete}` }); assert.equal(bodies, 10);
   checks.push('owner-disable-restores-host-behavior');
   console.log('SAFETY_PROBE_RESULT ' + JSON.stringify({ version, status: 'passed', checks, toolBodies: bodies, shellProcesses: 0, realDeletes: 0 }));
 } finally { await ctx.fiber.dispose(); }
