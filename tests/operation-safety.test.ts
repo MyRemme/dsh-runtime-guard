@@ -482,10 +482,12 @@ it('blocks Unix/macOS elevation, git -c config execution, package runners, and s
   expect((await f.run(f.execution('sudo id'))).kind).toBe('deny');
   expect(f.safety.status().events[0]?.rule).toBe('elevation');
 
+  const ws = process.platform === 'win32' ? 'D:\\project' : '/tmp/ws';
+
   // git -c / --config-env, package runners (npx/dlx/exec), python -m (non-test), node --import data:
-  expect(assessCommand('git -c pager.status="sh -c id" status', 'read-only', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'ask', rule: 'read-only-unknown' });
-  expect(assessCommand('git -c core.sshCommand="sh" fetch', 'workspace-write', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'ask', rule: 'opaque-execution' });
-  expect(assessCommand('git --config-env=core.sshCommand=X status', 'workspace-write', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'ask', rule: 'opaque-execution' });
+  expect(assessCommand('git -c pager.status="sh -c id" status', 'read-only', ws, ws)).toEqual({ kind: 'ask', rule: 'read-only-unknown' });
+  expect(assessCommand('git -c core.sshCommand="sh" fetch', 'workspace-write', ws, ws)).toEqual({ kind: 'ask', rule: 'opaque-execution' });
+  expect(assessCommand('git --config-env=core.sshCommand=X status', 'workspace-write', ws, ws)).toEqual({ kind: 'ask', rule: 'opaque-execution' });
   for (const cmd of [
     'npx untrusted-cli',
     'npm exec -- untrusted-cli',
@@ -495,15 +497,15 @@ it('blocks Unix/macOS elevation, git -c config execution, package runners, and s
     'python3 -m http.server 8000',
     'node --import=data:text/javascript,console.log(1) app.js',
   ]) {
-    expect(assessCommand(cmd, 'workspace-write', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'ask', rule: 'opaque-execution' });
+    expect(assessCommand(cmd, 'workspace-write', ws, ws)).toEqual({ kind: 'ask', rule: 'opaque-execution' });
   }
-  expect(assessCommand('python3 -m pytest -q', 'workspace-write', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'allow' });
-  expect(assessCommand('python3 -m unittest discover', 'workspace-write', '/tmp/ws', '/tmp/ws')).toEqual({ kind: 'allow' });
+  expect(assessCommand('python3 -m pytest -q', 'workspace-write', ws, ws)).toEqual({ kind: 'allow' });
+  expect(assessCommand('python3 -m unittest discover', 'workspace-write', ws, ws)).toEqual({ kind: 'allow' });
 
   // Sensitive credential/key file reads require approval even in read-only or workspace-write.
   for (const cmd of ['cat .env', 'cat .env.production', 'Get-Content .npmrc', 'cat /etc/passwd']) {
-    expect(assessCommand(cmd, 'read-only', '/tmp/ws', '/tmp/ws').kind).toBe('ask');
-    expect(assessCommand(cmd, 'workspace-write', '/tmp/ws', '/tmp/ws').kind).toBe('ask');
+    expect(assessCommand(cmd, 'read-only', ws, ws).kind).toBe('ask');
+    expect(assessCommand(cmd, 'workspace-write', ws, ws).kind).toBe('ask');
   }
   f.setMode('read-only');
   expect((await f.run(f.execution('', 'str_replace_editor', { command: 'view', path: 'D:\\project\\.env' }))).kind).toBe('deny');

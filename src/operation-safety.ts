@@ -253,9 +253,9 @@ function extractShellPathTokens(command: string): string[] {
   flush();
   for (const entry of rawTokens) {
     let cleaned = entry.replace(/[,;]+$/, '');
-    if (!cleaned || /^https?:\/\//i.test(cleaned)) continue;
     const boundPath = /^(?:--?[A-Za-z][A-Za-z0-9_-]*[:=]|[A-Za-z_][A-Za-z0-9_]*=)(.+)$/.exec(cleaned);
     if (boundPath) cleaned = boundPath[1]!.replace(/^['"]|['"]$/g, '');
+    if (!cleaned || /^(?:https?:\/\/|data:[a-z0-9.+-]+\/[a-z0-9.+-]+[,;])/i.test(cleaned)) continue;
     if (/^-[A-Za-z]/.test(cleaned)) continue;
     const looksLikePath = SPECIAL_PATH_PREFIX_RE.test(cleaned)
       || /^(?:[A-Za-z]:|\.\.(?:[/\\]|$)|\.[/\\])/i.test(cleaned)
